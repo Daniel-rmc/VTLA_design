@@ -13,24 +13,37 @@ import os
 import argparse
 from tqdm import tqdm
 import pickle
+import socket
+from datetime import timedelta
 from collections import defaultdict
 
 from models.tactile_encoder import TactileEncoderWithRefine
 from models.vtla_policy import VTLAPolicy
 from dataloader import create_dataloader, VTLADataset, TactilePretrainDataset
+from training_utils import append_epoch_metrics, build_run_config, write_run_config
 
 
-def setup_ddp(rank, world_size):
+def setup_ddp(rank, world_size, args):
     """初始化DDP"""
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
+    dist.init_process_group(
+        "nccl",
+        rank=rank,
+        world_size=world_size,
+        timeout=timedelta(seconds=args.ddp_timeout),
+    )
 
 
 def cleanup_ddp():
     """清理DDP"""
-    dist.destroy_process_group()
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def find_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(('127.0.0.1', 0))
+        return sock.getsockname()[1]
 
 
 class MultiGPUVTLATrainer:
@@ -43,6 +56,8 @@ class MultiGPUVTLATrainer:
         self.device = torch.device(f'cuda:{rank}')
         self.stage = args.stage
         self.is_main = (rank == 0)
+        self.dataset_stats = None
+        self.run_config = None
 
         # 只在主进程打印
         if self.is_main:
@@ -58,7 +73,7 @@ class MultiGPUVTLATrainer:
             self.model.to(self.device)
 
         # 包装为DDP
-        self.model = DDP(self.model, device_ids=[rank], find_unused_parameters=True)
+        self.model = DDP(self.model, device_ids=[rank], find_unused_parameters=False)
 
         # 优化器（仅在主进程打印）
         self.optimizer = self._build_optimizer()
@@ -78,7 +93,7 @@ class MultiGPUVTLATrainer:
             latent_dim=self.args.tactile_latent_dim,
             supervise=self.args.tactile_supervise,
             marker_nums=63,
-            pretrained=True
+            pretrained=(self.rank == 0)
         )
         model.to(self.device)
         return model
@@ -95,7 +110,8 @@ class MultiGPUVTLATrainer:
                 {'params': self.model.module.model.vision_backbone.parameters(),
                  'lr': self.args.lr_backbone},
                 {'params': [p for n, p in self.model.named_parameters()
-                           if 'tactile_encoder' not in n and 'vision_backbone' not in n],
+                           if p.requires_grad and 'tactile_encoder' not in n
+                           and 'vision_backbone' not in n],
                  'lr': self.args.lr}
             ]
             lr = self.args.lr
@@ -141,7 +157,7 @@ class MultiGPUVTLATrainer:
                 targets = {k: v.to(self.device) for k, v in batch['targets'].items()}
 
                 # 前向传播
-                loss, loss_dict = self.model.module.compute_loss(
+                loss, loss_dict = self.model(
                     tactile_images, targets, weights=self.args.loss_weights
                 )
 
@@ -158,9 +174,14 @@ class MultiGPUVTLATrainer:
                 if self.is_main and isinstance(pbar, tqdm):
                     pbar.set_postfix({k: f"{np.mean(v):.4f}" for k, v in epoch_losses.items()})
 
-            # 保存checkpoint（仅主进程）
-            if self.is_main and (epoch + 1) % self.args.save_freq == 0:
-                self.save_checkpoint(epoch, epoch_losses, stage='stage1')
+            epoch_losses = self.reduce_epoch_losses(epoch_losses)
+            peak_memory = self.reduce_peak_memory()
+            if self.is_main:
+                epoch_losses['peak_gpu_memory_gib'] = [peak_memory]
+                print(f"Peak GPU memory: {peak_memory:.2f} GiB")
+                append_epoch_metrics(self.args.run_dir, 'stage1', epoch, epoch_losses)
+                if (epoch + 1) % self.args.save_freq == 0 or epoch + 1 == num_epochs:
+                    self.save_checkpoint(epoch, epoch_losses, stage='stage1')
 
             self.scheduler.step()
 
@@ -173,7 +194,7 @@ class MultiGPUVTLATrainer:
             print("\n=== Stage 2: End-to-End VLA Training (Multi-GPU) ===")
 
         # 加载预训练的触觉编码器
-        if self.args.stage1_ckpt and self.is_main:
+        if self.args.stage1_ckpt:
             self.load_tactile_encoder(self.args.stage1_ckpt)
 
         for epoch in range(num_epochs):
@@ -209,9 +230,14 @@ class MultiGPUVTLATrainer:
                 if self.is_main and isinstance(pbar, tqdm):
                     pbar.set_postfix({k: f"{np.mean(v):.4f}" for k, v in epoch_losses.items()})
 
-            # 保存checkpoint
-            if self.is_main and (epoch + 1) % self.args.save_freq == 0:
-                self.save_checkpoint(epoch, epoch_losses, stage='stage2')
+            epoch_losses = self.reduce_epoch_losses(epoch_losses)
+            peak_memory = self.reduce_peak_memory()
+            if self.is_main:
+                epoch_losses['peak_gpu_memory_gib'] = [peak_memory]
+                print(f"Peak GPU memory: {peak_memory:.2f} GiB")
+                append_epoch_metrics(self.args.run_dir, 'stage2', epoch, epoch_losses)
+                if (epoch + 1) % self.args.save_freq == 0 or epoch + 1 == num_epochs:
+                    self.save_checkpoint(epoch, epoch_losses, stage='stage2')
 
             self.scheduler.step()
 
@@ -224,7 +250,7 @@ class MultiGPUVTLATrainer:
             print("\n=== Stage 3: Tactile Refine Branch Training (Multi-GPU) ===")
 
         # 加载stage2的checkpoint
-        if self.args.stage2_ckpt and self.is_main:
+        if self.args.stage2_ckpt:
             self.load_checkpoint(self.args.stage2_ckpt)
 
         for epoch in range(num_epochs):
@@ -263,9 +289,14 @@ class MultiGPUVTLATrainer:
                 if self.is_main and isinstance(pbar, tqdm):
                     pbar.set_postfix({k: f"{np.mean(v):.4f}" for k, v in epoch_losses.items()})
 
-            # 保存checkpoint
-            if self.is_main and (epoch + 1) % self.args.save_freq == 0:
-                self.save_checkpoint(epoch, epoch_losses, stage='stage3')
+            epoch_losses = self.reduce_epoch_losses(epoch_losses)
+            peak_memory = self.reduce_peak_memory()
+            if self.is_main:
+                epoch_losses['peak_gpu_memory_gib'] = [peak_memory]
+                print(f"Peak GPU memory: {peak_memory:.2f} GiB")
+                append_epoch_metrics(self.args.run_dir, 'stage3', epoch, epoch_losses)
+                if (epoch + 1) % self.args.save_freq == 0 or epoch + 1 == num_epochs:
+                    self.save_checkpoint(epoch, epoch_losses, stage='stage3')
 
             self.scheduler.step()
 
@@ -285,13 +316,41 @@ class MultiGPUVTLATrainer:
             'epoch': epoch,
             'model_state_dict': self.model.module.state_dict(),  # 注意：DDP需要用module
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'losses': {k: np.mean(v) for k, v in losses.items()}
+            'scheduler_state_dict': self.scheduler.state_dict(),
+            'losses': {k: np.mean(v) for k, v in losses.items()},
+            'dataset_stats': self.dataset_stats,
+            'run_config': self.run_config,
         }, ckpt_path)
         print(f"Checkpoint saved: {ckpt_path}")
 
+    def reduce_epoch_losses(self, losses):
+        """Return global, sample-count-weighted epoch means on every rank."""
+        reduced = defaultdict(list)
+        for key in sorted(losses):
+            values = losses[key]
+            totals = torch.tensor(
+                [float(np.sum(values)), float(len(values))],
+                device=self.device,
+                dtype=torch.float64,
+            )
+            dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+            reduced[key].append((totals[0] / totals[1].clamp_min(1)).item())
+        return reduced
+
+    def reduce_peak_memory(self):
+        peak = torch.tensor(
+            torch.cuda.max_memory_allocated(self.device) / 1024 ** 3,
+            device=self.device,
+            dtype=torch.float64,
+        )
+        dist.all_reduce(peak, op=dist.ReduceOp.MAX)
+        torch.cuda.reset_peak_memory_stats(self.device)
+        return peak.item()
+
     def load_tactile_encoder(self, ckpt_path):
         """加载预训练的触觉编码器"""
-        print(f"Loading tactile encoder from {ckpt_path}")
+        if self.is_main:
+            print(f"Loading tactile encoder from {ckpt_path}")
         checkpoint = torch.load(ckpt_path, map_location=self.device)
 
         tactile_state_dict = {}
@@ -301,68 +360,91 @@ class MultiGPUVTLATrainer:
                 tactile_state_dict[new_key] = v
 
         self.model.module.load_state_dict(tactile_state_dict, strict=False)
-        print("Tactile encoder loaded successfully!")
+        if self.is_main:
+            print("Tactile encoder loaded successfully!")
 
     def load_checkpoint(self, ckpt_path):
         """加载完整checkpoint"""
-        print(f"Loading checkpoint from {ckpt_path}")
+        if self.is_main:
+            print(f"Loading checkpoint from {ckpt_path}")
         checkpoint = torch.load(ckpt_path, map_location=self.device)
         self.model.module.load_state_dict(checkpoint['model_state_dict'])
-        print("Checkpoint loaded successfully!")
+        if self.is_main:
+            print("Checkpoint loaded successfully!")
 
 
 def main_worker(rank, world_size, args):
     """每个GPU进程的主函数"""
-    # 初始化DDP
-    setup_ddp(rank, world_size)
+    setup_ddp(rank, world_size, args)
+    try:
+        # Only rank 0 reads pretrained weights; DDP broadcasts them at construction.
+        args.pretrained_backbones = (rank == 0)
+        torch.manual_seed(args.seed + rank)
+        np.random.seed(args.seed + rank)
 
-    # 设置随机种子（每个进程不同的种子）
-    torch.manual_seed(args.seed + rank)
-    np.random.seed(args.seed + rank)
+        trainer = MultiGPUVTLATrainer(args, rank, world_size)
 
-    # 创建训练器
-    trainer = MultiGPUVTLATrainer(args, rank, world_size)
+        if args.stage == 'stage1':
+            dataset = TactilePretrainDataset(
+                args.dataset_dir, args.tactile_names, verbose=(rank == 0)
+            )
+            dataset_stats = None
+        else:
+            dataset = VTLADataset(
+                args.dataset_dir,
+                args.camera_names,
+                args.tactile_names,
+                args.chunk_size,
+                state_dim=args.state_dim,
+                verbose=(rank == 0),
+            )
+            dataset_stats = dataset.get_stats()
 
-    # 创建数据加载器（使用DistributedSampler）
-    if args.stage == 'stage1':
-        dataset = TactilePretrainDataset(args.dataset_dir, args.tactile_names)
-    else:
-        dataset = VTLADataset(
-            args.dataset_dir,
-            args.camera_names,
-            args.tactile_names,
-            args.chunk_size
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+            seed=args.seed,
         )
 
-    sampler = DistributedSampler(
-        dataset,
-        num_replicas=world_size,
-        rank=rank,
-        shuffle=True
-    )
+        train_loader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            sampler=sampler,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            persistent_workers=args.num_workers > 0,
+        )
+        trainer.dataset_stats = dataset_stats
 
-    train_loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        sampler=sampler,
-        num_workers=args.num_workers,
-        pin_memory=True
-    )
+        if rank == 0:
+            print(f"Dataset loaded: {len(train_loader)} batches per GPU")
+            print(f"Total samples: {len(dataset)}, Samples per GPU: {sampler.num_samples}")
+            trainer.run_config = build_run_config(
+                args,
+                world_size=world_size,
+                dataset_size=len(dataset),
+                batches_per_rank=len(train_loader),
+                dataset_stats=dataset_stats,
+            )
+            trainer.run_config['model'] = {
+                'total_parameters': sum(p.numel() for p in trainer.model.parameters()),
+                'trainable_parameters': sum(
+                    p.numel() for p in trainer.model.parameters() if p.requires_grad
+                ),
+            }
+            config_path = write_run_config(args.run_dir, trainer.run_config)
+            print(f"Run configuration saved: {config_path}")
 
-    if rank == 0:
-        print(f"Dataset loaded: {len(train_loader)} batches per GPU")
-        print(f"Total samples: {len(dataset)}, Samples per GPU: {len(dataset) // world_size}")
-
-    # 训练
-    if args.stage == 'stage1':
-        trainer.train_stage1(train_loader, args.num_epochs)
-    elif args.stage == 'stage2':
-        trainer.train_stage2(train_loader, args.num_epochs)
-    elif args.stage == 'stage3':
-        trainer.train_stage3(train_loader, args.num_epochs)
-
-    # 清理
-    cleanup_ddp()
+        if args.stage == 'stage1':
+            trainer.train_stage1(train_loader, args.num_epochs)
+        elif args.stage == 'stage2':
+            trainer.train_stage2(train_loader, args.num_epochs)
+        elif args.stage == 'stage3':
+            trainer.train_stage3(train_loader, args.num_epochs)
+    finally:
+        cleanup_ddp()
 
 
 def get_args():
@@ -371,6 +453,11 @@ def get_args():
     # Multi-GPU设置
     parser.add_argument('--num_gpus', type=int, default=4,
                        help='Number of GPUs to use')
+    parser.add_argument('--master_addr', type=str, default='127.0.0.1')
+    parser.add_argument('--master_port', type=int, default=0,
+                       help='DDP TCP port; 0 selects a free local port')
+    parser.add_argument('--ddp_timeout', type=int, default=180,
+                       help='Collective timeout in seconds')
 
     # 训练阶段
     parser.add_argument('--stage', type=str, required=True,
@@ -402,13 +489,15 @@ def get_args():
 
     # 交叉注意力
     parser.add_argument('--cross_attn_layers', type=int, default=2)
-    parser.add_argument('--use_tactile_refine', action='store_true', default=True)
+    parser.add_argument('--use_tactile_refine', action=argparse.BooleanOptionalAction,
+                        default=True)
     parser.add_argument('--refine_scale', type=float, default=0.1)
 
     # 损失权重
     parser.add_argument('--kl_weight', type=float, default=10.0)
     parser.add_argument('--refine_weight', type=float, default=0.5)
     parser.add_argument('--contact_weight', type=float, default=0.1)
+    parser.add_argument('--pad_weight', type=float, default=1.0)
 
     # 训练超参数
     parser.add_argument('--num_epochs', type=int, default=1000)
@@ -427,6 +516,8 @@ def get_args():
     parser.add_argument('--stage1_ckpt', type=str, default=None)
     parser.add_argument('--stage2_ckpt', type=str, default=None)
     parser.add_argument('--save_freq', type=int, default=50)
+    parser.add_argument('--run_dir', type=str, default=None,
+                       help='Directory for config.json and metrics.jsonl')
 
     # 其他
     parser.add_argument('--seed', type=int, default=42)
@@ -445,6 +536,14 @@ def get_args():
 if __name__ == '__main__':
     args = get_args()
     world_size = args.num_gpus
+    if world_size < 1 or world_size > torch.cuda.device_count():
+        raise ValueError(
+            f"Requested {world_size} GPUs, but {torch.cuda.device_count()} are visible"
+        )
+    args.run_dir = args.run_dir or os.path.dirname(os.path.abspath(args.ckpt_dir))
+    os.environ['MASTER_ADDR'] = args.master_addr
+    args.master_port = args.master_port or find_free_port()
+    os.environ['MASTER_PORT'] = str(args.master_port)
 
     print(f"{'='*60}")
     print(f"VTLA Multi-GPU Training")

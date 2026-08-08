@@ -210,7 +210,7 @@ class DualPathActionHead(nn.Module):
         self.refine_head = TactileRefineHead(
             tactile_dim=tactile_dim,
             action_dim=action_dim,
-            use_contact_gating=True
+            use_contact_gating=False
         )
 
         # 接触检测器
@@ -249,15 +249,14 @@ class DualPathActionHead(nn.Module):
         contact_prob = self.contact_detector(tactile_features)
 
         # 触觉微调残差
-        action_residual, gate_weight = self.refine_head(
-            tactile_features,
-            contact_strength=contact_prob
-        )
+        action_residual, _ = self.refine_head(tactile_features)
+        action_residual = action_residual * contact_prob
+        gate_weight = contact_prob
 
         # 计算最终动作
         if self.adaptive_scale:
-            # 自适应缩放
-            scale = self.scale_predictor(tactile_features)
+            # 在配置的安全上限内学习逐时刻缩放，而不是绕过 refine_scale。
+            scale = self.refine_scale * self.scale_predictor(tactile_features)
             scaled_residual = action_residual * scale
         else:
             # 固定缩放

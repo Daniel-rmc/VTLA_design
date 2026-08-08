@@ -17,6 +17,7 @@ from collections import defaultdict
 
 from models.tactile_encoder import TactileEncoderWithRefine
 from models.vtla_policy import VTLAPolicy
+from training_utils import append_epoch_metrics, build_run_config, write_run_config
 
 
 class VTLATrainer:
@@ -26,6 +27,8 @@ class VTLATrainer:
         self.args = args
         self.device = torch.device(args.device)
         self.stage = args.stage
+        self.dataset_stats = None
+        self.run_config = None
 
         # 创建保存目录
         os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -135,7 +138,8 @@ class VTLATrainer:
                 pbar.set_postfix({k: f"{np.mean(v):.4f}" for k, v in epoch_losses.items()})
 
             # 保存checkpoint
-            if (epoch + 1) % self.args.save_freq == 0:
+            append_epoch_metrics(self.args.run_dir, 'stage1', epoch, epoch_losses)
+            if (epoch + 1) % self.args.save_freq == 0 or epoch + 1 == num_epochs:
                 self.save_checkpoint(epoch, epoch_losses, stage='stage1')
 
             self.scheduler.step()
@@ -181,7 +185,8 @@ class VTLATrainer:
                 pbar.set_postfix({k: f"{np.mean(v):.4f}" for k, v in epoch_losses.items()})
 
             # 保存checkpoint
-            if (epoch + 1) % self.args.save_freq == 0:
+            append_epoch_metrics(self.args.run_dir, 'stage2', epoch, epoch_losses)
+            if (epoch + 1) % self.args.save_freq == 0 or epoch + 1 == num_epochs:
                 self.save_checkpoint(epoch, epoch_losses, stage='stage2')
 
             self.scheduler.step()
@@ -230,7 +235,8 @@ class VTLATrainer:
                 pbar.set_postfix({k: f"{np.mean(v):.4f}" for k, v in epoch_losses.items()})
 
             # 保存checkpoint
-            if (epoch + 1) % self.args.save_freq == 0:
+            append_epoch_metrics(self.args.run_dir, 'stage3', epoch, epoch_losses)
+            if (epoch + 1) % self.args.save_freq == 0 or epoch + 1 == num_epochs:
                 self.save_checkpoint(epoch, epoch_losses, stage='stage3')
 
             self.scheduler.step()
@@ -247,7 +253,10 @@ class VTLATrainer:
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'losses': {k: np.mean(v) for k, v in losses.items()}
+            'scheduler_state_dict': self.scheduler.state_dict(),
+            'losses': {k: np.mean(v) for k, v in losses.items()},
+            'dataset_stats': self.dataset_stats,
+            'run_config': self.run_config,
         }, ckpt_path)
         print(f"Checkpoint saved: {ckpt_path}")
 
@@ -306,13 +315,15 @@ def get_args():
 
     # 交叉注意力
     parser.add_argument('--cross_attn_layers', type=int, default=2)
-    parser.add_argument('--use_tactile_refine', action='store_true', default=True)
+    parser.add_argument('--use_tactile_refine', action=argparse.BooleanOptionalAction,
+                        default=True)
     parser.add_argument('--refine_scale', type=float, default=0.1)
 
     # 损失权重
     parser.add_argument('--kl_weight', type=float, default=10.0)
     parser.add_argument('--refine_weight', type=float, default=0.5)
     parser.add_argument('--contact_weight', type=float, default=0.1)
+    parser.add_argument('--pad_weight', type=float, default=1.0)
 
     # 训练超参数
     parser.add_argument('--num_epochs', type=int, default=1000)
@@ -331,6 +342,8 @@ def get_args():
     parser.add_argument('--stage1_ckpt', type=str, default=None)
     parser.add_argument('--stage2_ckpt', type=str, default=None)
     parser.add_argument('--save_freq', type=int, default=50)
+    parser.add_argument('--run_dir', type=str, default=None,
+                       help='Directory for config.json and metrics.jsonl')
 
     # 其他
     parser.add_argument('--device', type=str, default='cuda:0')
@@ -338,7 +351,6 @@ def get_args():
 
     # UniVTAC兼容参数
     parser.add_argument('--backbone', type=str, default='resnet18')
-    parser.add_argument('--lr_backbone', type=float, default=1e-5)
     parser.add_argument('--masks', action='store_true', default=False)
     parser.add_argument('--dilation', action='store_true', default=False)
     parser.add_argument('--position_embedding', type=str, default='sine')
@@ -349,6 +361,7 @@ def get_args():
 
 if __name__ == '__main__':
     args = get_args()
+    args.run_dir = args.run_dir or os.path.dirname(os.path.abspath(args.ckpt_dir))
 
     # 设置随机种子
     torch.manual_seed(args.seed)
@@ -363,6 +376,25 @@ if __name__ == '__main__':
     print(f"Loading dataset from: {args.dataset_dir}")
     train_loader = create_dataloader(args, stage=args.stage)
     print(f"Dataset loaded: {len(train_loader)} batches")
+    trainer.dataset_stats = (
+        train_loader.dataset.get_stats()
+        if hasattr(train_loader.dataset, 'get_stats') else None
+    )
+    trainer.run_config = build_run_config(
+        args,
+        world_size=1,
+        dataset_size=len(train_loader.dataset),
+        batches_per_rank=len(train_loader),
+        dataset_stats=trainer.dataset_stats,
+    )
+    trainer.run_config['model'] = {
+        'total_parameters': sum(p.numel() for p in trainer.model.parameters()),
+        'trainable_parameters': sum(
+            p.numel() for p in trainer.model.parameters() if p.requires_grad
+        ),
+    }
+    config_path = write_run_config(args.run_dir, trainer.run_config)
+    print(f"Run configuration saved: {config_path}")
 
     # 训练流程
     if args.stage == 'stage1':

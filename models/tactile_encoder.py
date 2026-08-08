@@ -5,7 +5,7 @@ Tactile Encoder Module
 import torch
 import torch.nn as nn
 from torchvision import models
-from typing import Literal, Optional
+from typing import Optional, Sequence
 
 
 class TactileEncoder(nn.Module):
@@ -38,13 +38,16 @@ class TactileEncoder(nn.Module):
 
         # 选择骨干网络
         if backbone == 'resnet18':
-            self.backbone = models.resnet18(pretrained=pretrained)
+            weights = models.ResNet18_Weights.DEFAULT if pretrained else None
+            self.backbone = models.resnet18(weights=weights)
             self.feature_dim = 512
         elif backbone == 'resnet34':
-            self.backbone = models.resnet34(pretrained=pretrained)
+            weights = models.ResNet34_Weights.DEFAULT if pretrained else None
+            self.backbone = models.resnet34(weights=weights)
             self.feature_dim = 512
         elif backbone == 'resnet50':
-            self.backbone = models.resnet50(pretrained=pretrained)
+            weights = models.ResNet50_Weights.DEFAULT if pretrained else None
+            self.backbone = models.resnet50(weights=weights)
             self.feature_dim = 2048
         else:
             raise ValueError(f"Unsupported backbone: {backbone}")
@@ -114,7 +117,7 @@ class TactileEncoderWithRefine(nn.Module):
         self,
         backbone: str = 'resnet34',
         latent_dim: int = 512,
-        supervise: list = ['marker', 'rgb'],
+        supervise: Optional[Sequence[str]] = None,
         marker_nums: int = 63,
         pretrained: bool = True
     ):
@@ -127,39 +130,46 @@ class TactileEncoderWithRefine(nn.Module):
             freeze_backbone=False
         )
 
-        self.supervise = supervise
+        self.supervise = list(supervise or ['marker', 'rgb'])
         self.decoders = nn.ModuleDict()
 
         # Marker重建头
-        if 'marker' in supervise:
+        if 'marker' in self.supervise:
             self.decoders['marker'] = MarkerDecoder(
                 latent_dim=latent_dim,
                 marker_nums=marker_nums
             )
 
         # RGB重建头
-        if 'rgb' in supervise:
+        if 'rgb' in self.supervise:
             self.decoders['rgb'] = RGBDecoder(
                 latent_dim=latent_dim,
                 output_channels=3
             )
 
         # 深度重建头
-        if 'depth' in supervise:
+        if 'depth' in self.supervise:
             self.decoders['depth'] = RGBDecoder(
                 latent_dim=latent_dim,
                 output_channels=1
             )
 
         # Pose回归头
-        if 'pose' in supervise:
+        if 'pose' in self.supervise:
             self.decoders['pose'] = PoseDecoder(
                 latent_dim=latent_dim,
                 pose_dims=7
             )
 
-    def forward(self, x: torch.Tensor):
-        """前向传播，仅返回编码特征"""
+    def forward(
+        self,
+        x: torch.Tensor,
+        targets: Optional[dict] = None,
+        weights: Optional[dict] = None,
+    ):
+        """Encode an image, or compute pretraining losses through DDP."""
+        if targets is not None:
+            return self.compute_loss(x, targets, weights)
         return self.encoder(x, return_tokens=False)
 
     def reconstruct(self, x: torch.Tensor):
@@ -181,6 +191,8 @@ class TactileEncoderWithRefine(nn.Module):
         loss_dict = {}
 
         for key in self.supervise:
+            if key not in targets:
+                raise KeyError(f"Missing tactile pretraining target: {key}")
             if key in ['rgb', 'depth']:
                 criterion = nn.MSELoss()
                 # 调整输出尺寸以匹配目标

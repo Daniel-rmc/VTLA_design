@@ -2,6 +2,14 @@
 
 一个用于接触丰富机器人操作任务的新型视触觉融合模型，具有独立触觉编码器和触觉感知动作微调机制。
 
+> 当前实现尚未接入语言编码器，因此严格来说是 Vision-Tactile-Action 策略。当前演示数据也没有独立 action 字段，训练加载器暂以“下一时刻关节位置”作为 action proxy。详见 [CODE_REVIEW.md](CODE_REVIEW.md)。
+
+本地训练会为每次运行创建独立目录 `runs/<stage>/<run-name>/`，保存完整配置、Git 版本、GPU 映射、数据归一化统计、日志、逐 epoch 指标和 checkpoint。当前三卡命令为：
+
+```bash
+./start_training_multigpu.sh stage2 3 1,2,3
+```
+
 ## 🎯 核心创新
 
 1. **独立触觉编码器**：不与视觉共享参数，专门处理触觉传感器数据

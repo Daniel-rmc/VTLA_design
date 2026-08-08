@@ -1,263 +1,288 @@
-"""
-简单的数据加载器 - 基于UniVTAC格式
-用于VTLA训练的演示
-"""
-import torch
-from torch.utils.data import Dataset, DataLoader
+"""HDF5 data loaders for the three VTLA training stages."""
+
+from pathlib import Path
+from typing import Dict, Iterable, Optional, Tuple
+
+import cv2
 import h5py
 import numpy as np
-import os
-from pathlib import Path
-import cv2
+import torch
+from torch.utils.data import DataLoader, Dataset
 
 
-def decode_image(img_data):
-    """解码JPEG编码的图像数据"""
-    if isinstance(img_data, bytes) or (isinstance(img_data, np.ndarray) and
-                                       (img_data.dtype == np.object_ or img_data.dtype.type == np.bytes_)):
-        # JPEG编码的图像，需要解码
-        if isinstance(img_data, np.ndarray):
-            img_data = img_data.tobytes() if img_data.shape == () else bytes(img_data)
-        img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # BGR to RGB
-        return img
-    else:
-        # 直接是numpy数组
-        return np.array(img_data)
+IMAGE_SIZE = (256, 256)
+IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+
+CAMERA_PATHS = {
+    'cam_high': 'observation/head/rgb',
+    'cam_wrist': 'observation/wrist/rgb',
+}
+TACTILE_PATHS = {
+    'tac_left': 'tactile/left_tactile/rgb',
+    'tac_right': 'tactile/right_tactile/rgb',
+}
+
+
+def decode_image(img_data: object) -> np.ndarray:
+    """Decode either a JPEG byte string or an already-decoded HWC array."""
+    is_encoded = isinstance(img_data, (bytes, np.bytes_))
+    if isinstance(img_data, np.ndarray):
+        is_encoded = is_encoded or img_data.dtype.kind in {'O', 'S'}
+
+    if is_encoded:
+        encoded = img_data.tobytes() if isinstance(img_data, np.ndarray) else bytes(img_data)
+        image = cv2.imdecode(np.frombuffer(encoded, np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("OpenCV failed to decode an encoded image")
+        return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    image = np.asarray(img_data)
+    if image.ndim != 3 or image.shape[-1] != 3:
+        raise ValueError(f"Expected an HWC RGB image, got shape {image.shape}")
+    return image
+
+
+def image_to_tensor(img_data: object, normalize: bool = True) -> torch.Tensor:
+    """Decode and resize an image, returning a contiguous CHW float tensor."""
+    image = cv2.resize(decode_image(img_data), IMAGE_SIZE, interpolation=cv2.INTER_AREA)
+    tensor = torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1).float() / 255.0
+    if normalize:
+        tensor = (tensor - IMAGENET_MEAN) / IMAGENET_STD
+    return tensor
+
+
+def _require_datasets(root: h5py.File, paths: Iterable[str], episode_path: Path) -> None:
+    missing = [path for path in paths if path not in root]
+    if missing:
+        raise KeyError(f"{episode_path} is missing required datasets: {missing}")
 
 
 class VTLADataset(Dataset):
-    """VTLA训练数据集"""
+    """One sample per trajectory timestep with a future joint-position chunk.
 
-    def __init__(self, dataset_dir, camera_names, tactile_names, chunk_size=100):
+    The source files do not contain a dedicated robot action dataset. Until one
+    is added, the next joint positions are used explicitly as an action proxy.
+    """
+
+    def __init__(
+        self,
+        dataset_dir: str,
+        camera_names: Iterable[str],
+        tactile_names: Iterable[str],
+        chunk_size: int = 100,
+        state_dim: Optional[int] = None,
+        normalize_joints: bool = True,
+        verbose: bool = True,
+    ):
         self.dataset_dir = Path(dataset_dir)
-        self.camera_names = camera_names
-        self.tactile_names = tactile_names
+        self.camera_names = list(camera_names)
+        self.tactile_names = list(tactile_names)
         self.chunk_size = chunk_size
+        self.state_dim = state_dim
+        self.normalize_joints = normalize_joints
 
-        # 查找所有hdf5文件
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+        if not self.camera_names:
+            raise ValueError("At least one camera must be configured")
+        if not self.tactile_names:
+            raise ValueError("At least one tactile sensor must be configured")
+
         hdf5_dir = self.dataset_dir / 'hdf5'
         if not hdf5_dir.exists():
             raise ValueError(f"HDF5 directory not found: {hdf5_dir}")
 
-        self.episode_files = sorted(list(hdf5_dir.glob('*.hdf5')))
-        print(f"Found {len(self.episode_files)} episodes")
-
-        if len(self.episode_files) == 0:
+        self.episode_files = sorted(hdf5_dir.glob('*.hdf5'))
+        if not self.episode_files:
             raise ValueError(f"No HDF5 files found in {hdf5_dir}")
 
-    def __len__(self):
-        return len(self.episode_files)
+        required_paths = [
+            'embodiment/joint',
+            *(CAMERA_PATHS.get(name, f'observation/{name}/rgb') for name in self.camera_names),
+            *(TACTILE_PATHS.get(name, f'tactile/{name}/rgb') for name in self.tactile_names),
+        ]
+        self.samples = []
+        all_joints = []
 
-    def __getitem__(self, idx):
-        episode_path = self.episode_files[idx]
+        for episode_path in self.episode_files:
+            with h5py.File(episode_path, 'r') as root:
+                _require_datasets(root, required_paths, episode_path)
+                joints = np.asarray(root['embodiment/joint'], dtype=np.float32)
+                if joints.ndim != 2:
+                    raise ValueError(f"{episode_path}: joint data must be 2D, got {joints.shape}")
+                if state_dim is not None and joints.shape[1] != state_dim:
+                    raise ValueError(
+                        f"{episode_path}: configured state_dim={state_dim}, "
+                        f"but joint data has dimension {joints.shape[1]}"
+                    )
+                for path in required_paths[1:]:
+                    if len(root[path]) != len(joints):
+                        raise ValueError(
+                            f"{episode_path}: {path} has {len(root[path])} frames, "
+                            f"expected {len(joints)}"
+                        )
+                if len(joints) < 2:
+                    continue
+                all_joints.append(joints)
+                self.samples.extend((episode_path, timestep) for timestep in range(len(joints) - 1))
 
-        with h5py.File(episode_path, 'r') as f:
-            # 读取机器人状态 (从embodiment/joint)
-            if 'embodiment/joint' in f:
-                qpos = np.array(f['embodiment/joint'][0])  # 取第一帧
-            else:
-                qpos = np.zeros(14)  # 默认状态维度
+        if not self.samples:
+            raise ValueError("No trajectory contains enough frames to form a training sample")
 
-            # 读取相机图像 (从observation/)
+        joint_values = np.concatenate(all_joints, axis=0)
+        self.joint_mean = joint_values.mean(axis=0).astype(np.float32)
+        self.joint_std = np.maximum(joint_values.std(axis=0), 1e-2).astype(np.float32)
+
+        if verbose:
+            print(
+                f"Found {len(self.episode_files)} episodes and "
+                f"{len(self.samples)} timestep samples"
+            )
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def get_stats(self) -> Dict[str, np.ndarray]:
+        return {
+            'joint_mean': self.joint_mean.copy(),
+            'joint_std': self.joint_std.copy(),
+            'action_source': 'next embodiment/joint positions',
+        }
+
+    def _normalize(self, values: np.ndarray) -> np.ndarray:
+        if not self.normalize_joints:
+            return values.astype(np.float32, copy=False)
+        return ((values - self.joint_mean) / self.joint_std).astype(np.float32)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        episode_path, timestep = self.samples[idx]
+
+        with h5py.File(episode_path, 'r') as root:
+            joints = root['embodiment/joint']
+            qpos = self._normalize(np.asarray(joints[timestep], dtype=np.float32))
+
             cam_images = []
-            # 映射相机名称
-            camera_mapping = {
-                'cam_high': 'observation/head/rgb',
-                'cam_wrist': 'observation/wrist/rgb',
-            }
-            for cam_name in self.camera_names:
-                hdf5_path = camera_mapping.get(cam_name, f'observation/{cam_name}/rgb')
-                if hdf5_path in f:
-                    img_data = f[hdf5_path][0]
-                    img = decode_image(img_data)  # 解码JPEG
-                    # 调整大小到256x256
-                    img = cv2.resize(img, (256, 256))
-                    img = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
-                    cam_images.append(img)
+            for name in self.camera_names:
+                path = CAMERA_PATHS.get(name, f'observation/{name}/rgb')
+                cam_images.append(image_to_tensor(root[path][timestep]))
 
-            # 读取触觉图像 (从tactile/)
             tac_images = []
-            tactile_mapping = {
-                'tac_left': 'tactile/left_tactile/rgb',
-                'tac_right': 'tactile/right_tactile/rgb',
-            }
-            for tac_name in self.tactile_names:
-                hdf5_path = tactile_mapping.get(tac_name, f'tactile/{tac_name}/rgb')
-                if hdf5_path in f:
-                    img_data = f[hdf5_path][0]
-                    img = decode_image(img_data)  # 解码JPEG
-                    # 调整大小到256x256
-                    img = cv2.resize(img, (256, 256))
-                    img = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
-                    tac_images.append(img)
+            for name in self.tactile_names:
+                path = TACTILE_PATHS.get(name, f'tactile/{name}/rgb')
+                tac_images.append(image_to_tensor(root[path][timestep]))
 
-            # 读取动作序列 (使用embodiment/joint作为action proxy)
-            if 'embodiment/joint' in f:
-                actions = np.array(f['embodiment/joint'][:])
-            else:
-                actions = np.zeros((10, 14))  # 默认动作序列
+            action_end = min(timestep + 1 + self.chunk_size, len(joints))
+            future_joints = np.asarray(joints[timestep + 1:action_end], dtype=np.float32)
+            future_joints = self._normalize(future_joints)
 
-            # 填充或截断到chunk_size
-            episode_len = len(actions)
-            if episode_len < self.chunk_size:
-                # 填充
-                actions_padded = np.zeros((self.chunk_size, actions.shape[1]))
-                actions_padded[:episode_len] = actions
-                is_pad = np.ones(self.chunk_size, dtype=bool)
-                is_pad[:episode_len] = False
-            else:
-                # 截断
-                actions_padded = actions[:self.chunk_size]
-                is_pad = np.zeros(self.chunk_size, dtype=bool)
+        valid_steps = len(future_joints)
+        action_dim = future_joints.shape[1]
+        actions = np.zeros((self.chunk_size, action_dim), dtype=np.float32)
+        actions[:valid_steps] = future_joints
+        is_pad = np.ones(self.chunk_size, dtype=bool)
+        is_pad[:valid_steps] = False
 
         return {
-            'qpos': torch.from_numpy(qpos).float(),
-            'cam_image': torch.stack(cam_images) if cam_images else torch.zeros(1, 3, 256, 256),
-            'tac_image': torch.stack(tac_images) if tac_images else torch.zeros(1, 3, 256, 256),
-            'actions': torch.from_numpy(actions_padded).float(),
+            'qpos': torch.from_numpy(qpos),
+            'cam_image': torch.stack(cam_images),
+            'tac_image': torch.stack(tac_images),
+            'actions': torch.from_numpy(actions),
             'is_pad': torch.from_numpy(is_pad),
         }
 
 
 class TactilePretrainDataset(Dataset):
-    """Stage 1: 触觉编码器预训练数据集"""
+    """All available frames from all configured tactile sensors."""
 
-    def __init__(self, dataset_dir, tactile_names):
+    def __init__(self, dataset_dir: str, tactile_names: Iterable[str], verbose: bool = True):
         self.dataset_dir = Path(dataset_dir)
-        self.tactile_names = tactile_names
-
+        self.tactile_names = list(tactile_names)
         hdf5_dir = self.dataset_dir / 'hdf5'
-        self.episode_files = sorted(list(hdf5_dir.glob('*.hdf5')))
-        print(f"Found {len(self.episode_files)} episodes for tactile pretraining")
+        self.episode_files = sorted(hdf5_dir.glob('*.hdf5'))
+        if not self.episode_files:
+            raise ValueError(f"No HDF5 files found in {hdf5_dir}")
 
-    def __len__(self):
-        return len(self.episode_files) * 10  # 每个episode采样多帧
+        self.samples = []
+        for episode_path in self.episode_files:
+            with h5py.File(episode_path, 'r') as root:
+                for name in self.tactile_names:
+                    rgb_path = TACTILE_PATHS.get(name, f'tactile/{name}/rgb')
+                    _require_datasets(root, [rgb_path], episode_path)
+                    self.samples.extend(
+                        (episode_path, name, timestep) for timestep in range(len(root[rgb_path]))
+                    )
 
-    def __getitem__(self, idx):
-        episode_idx = idx // 10
-        frame_idx = idx % 10
+        if verbose:
+            print(
+                f"Found {len(self.episode_files)} episodes and "
+                f"{len(self.samples)} tactile frames for pretraining"
+            )
 
-        episode_path = self.episode_files[episode_idx % len(self.episode_files)]
+    def __len__(self) -> int:
+        return len(self.samples)
 
-        with h5py.File(episode_path, 'r') as f:
-            # 读取触觉图像
-            tac_name = self.tactile_names[0]
-            tactile_mapping = {
-                'tac_left': 'tactile/left_tactile/rgb',
-                'tac_right': 'tactile/right_tactile/rgb',
-            }
-            hdf5_path = tactile_mapping.get(tac_name, f'tactile/{tac_name}/rgb')
+    def __getitem__(self, idx: int) -> Dict[str, object]:
+        episode_path, tactile_name, timestep = self.samples[idx]
+        rgb_path = TACTILE_PATHS.get(tactile_name, f'tactile/{tactile_name}/rgb')
+        base_path = rgb_path.rsplit('/rgb', 1)[0]
 
-            if hdf5_path in f:
-                total_frames = len(f[hdf5_path])
-                frame_idx = min(frame_idx, total_frames - 1)
-                img_data = f[hdf5_path][frame_idx]
-                img = decode_image(img_data)  # 解码JPEG
-                img = cv2.resize(img, (256, 256))
-                img = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
+        with h5py.File(episode_path, 'r') as root:
+            raw_image = root[rgb_path][timestep]
+            tactile_image = image_to_tensor(raw_image, normalize=True)
+            rgb_target = image_to_tensor(raw_image, normalize=False)
 
-                # 读取对应的marker和pose（如果有）
-                marker_path = hdf5_path.replace('/rgb', '/marker')
-                pose_path = hdf5_path.replace('/rgb', '/pose')
-
-                if marker_path in f:
-                    marker = torch.from_numpy(np.array(f[marker_path][frame_idx])).float()
-                else:
-                    marker = torch.zeros(63, 2)
-
-                if pose_path in f:
-                    pose = torch.from_numpy(np.array(f[pose_path][frame_idx])).float()
-                else:
-                    pose = torch.zeros(7)
+            marker_path = f'{base_path}/marker'
+            if marker_path in root:
+                marker_data = np.asarray(root[marker_path][timestep], dtype=np.float32)
+                if marker_data.ndim == 3:
+                    marker_data = marker_data[0]
+                marker = marker_data[:63] / np.array([320.0, 240.0], dtype=np.float32)
             else:
-                img = torch.zeros(3, 256, 256)
-                marker = torch.zeros(63, 2)
-                pose = torch.zeros(7)
+                marker = np.zeros((63, 2), dtype=np.float32)
 
-        # 自监督目标
-        targets = {
-            'rgb': img,
-            'marker': marker,
-            'pose': pose,
-        }
+            pose_path = f'{base_path}/pose'
+            pose = (
+                np.asarray(root[pose_path][timestep], dtype=np.float32)
+                if pose_path in root else np.zeros(7, dtype=np.float32)
+            )
+
+            depth_path = f'{base_path}/depth'
+            if depth_path in root:
+                depth = np.asarray(root[depth_path][timestep], dtype=np.float32)
+                depth = np.clip((depth - 24.0) / 10.0, 0.0, 1.0)[None]
+            else:
+                depth = np.zeros((1, 240, 320), dtype=np.float32)
 
         return {
-            'tactile_image': img,
-            'targets': targets
+            'tactile_image': tactile_image,
+            'targets': {
+                'rgb': rgb_target,
+                'marker': torch.from_numpy(marker),
+                'pose': torch.from_numpy(pose),
+                'depth': torch.from_numpy(depth),
+            },
         }
 
 
-def create_dataloader(args, stage='stage2'):
-    """创建数据加载器"""
-
+def create_dataloader(args, stage: str = 'stage2') -> DataLoader:
+    """Create a single-process training data loader."""
     if stage == 'stage1':
-        dataset = TactilePretrainDataset(
-            args.dataset_dir,
-            args.tactile_names
-        )
+        dataset = TactilePretrainDataset(args.dataset_dir, args.tactile_names)
     else:
         dataset = VTLADataset(
             args.dataset_dir,
             args.camera_names,
             args.tactile_names,
-            args.chunk_size
+            args.chunk_size,
+            state_dim=args.state_dim,
         )
 
-    dataloader = DataLoader(
+    return DataLoader(
         dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=args.num_workers > 0,
     )
-
-    return dataloader
-
-
-if __name__ == '__main__':
-    # 测试数据加载器
-    class Args:
-        dataset_dir = '/home/rmc/workspace/UniVTAC/data/grasp_classify/demo'
-        camera_names = ['cam_high']
-        tactile_names = ['tac_left', 'tac_right']
-        chunk_size = 50
-        batch_size = 2
-        num_workers = 0
-
-    args = Args()
-
-    print("Testing Stage 2 dataloader...")
-    try:
-        dataloader = create_dataloader(args, stage='stage2')
-
-        for batch in dataloader:
-            print("Batch keys:", batch.keys())
-            print("qpos shape:", batch['qpos'].shape)
-            print("cam_image shape:", batch['cam_image'].shape)
-            print("tac_image shape:", batch['tac_image'].shape)
-            print("actions shape:", batch['actions'].shape)
-            print("is_pad shape:", batch['is_pad'].shape)
-            break
-
-        print("\n✓ Stage 2 dataloader test passed!")
-    except Exception as e:
-        print(f"\n✗ Stage 2 test failed: {e}")
-        import traceback
-        traceback.print_exc()
-
-    print("\nTesting Stage 1 dataloader...")
-    try:
-        dataloader = create_dataloader(args, stage='stage1')
-
-        for batch in dataloader:
-            print("Batch keys:", batch.keys())
-            print("tactile_image shape:", batch['tactile_image'].shape)
-            print("targets keys:", batch['targets'].keys())
-            break
-
-        print("\n✓ Stage 1 dataloader test passed!")
-    except Exception as e:
-        print(f"\n✗ Stage 1 test failed: {e}")
-        import traceback
-        traceback.print_exc()

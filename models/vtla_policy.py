@@ -13,10 +13,6 @@ from .tactile_encoder import TactileEncoder
 from .cross_modal_fusion import BiDirectionalCrossAttention
 from .action_heads import DualPathActionHead
 
-# 导入UniVTAC的backbone和transformer
-import sys
-import os
-
 # 添加UniVTAC路径
 univtac_base = os.path.join(os.path.dirname(__file__), '../../../UniVTAC')
 univtac_detr = os.path.join(univtac_base, 'policy/ACT/detr')
@@ -65,6 +61,24 @@ def get_sinusoid_encoding_table(n_position, d_hid):
     return torch.FloatTensor(sinusoid_table).unsqueeze(0)
 
 
+def get_2d_sinusoid_encoding(height, width, d_model, device, dtype):
+    """Return a deterministic [1, D, H, W] 2-D positional encoding."""
+    if d_model % 4 != 0:
+        raise ValueError(f"hidden_dim must be divisible by 4, got {d_model}")
+    quarter_dim = d_model // 4
+    omega = torch.arange(quarter_dim, device=device, dtype=torch.float32)
+    omega = 1.0 / (10000 ** (omega / max(quarter_dim - 1, 1)))
+    y, x = torch.meshgrid(
+        torch.arange(height, device=device, dtype=torch.float32),
+        torch.arange(width, device=device, dtype=torch.float32),
+        indexing='ij',
+    )
+    x = x.reshape(-1, 1) * omega.reshape(1, -1)
+    y = y.reshape(-1, 1) * omega.reshape(1, -1)
+    encoding = torch.cat([x.sin(), x.cos(), y.sin(), y.cos()], dim=1)
+    return encoding.to(dtype=dtype).transpose(0, 1).reshape(1, d_model, height, width)
+
+
 class VTLAModel(nn.Module):
     """
     VTLA主模型：Vision-Tactile-Language-Action
@@ -90,6 +104,7 @@ class VTLAModel(nn.Module):
         camera_names: list,
         tactile_names: list,
         hidden_dim: int = 512,
+        nheads: int = 8,
         cross_attn_layers: int = 2,
         use_tactile_refine: bool = True,
         refine_scale: float = 0.1
@@ -111,16 +126,18 @@ class VTLAModel(nn.Module):
             vision_backbone.num_channels, hidden_dim, kernel_size=1
         )
         self.tactile_input_proj = nn.Conv2d(
-            tactile_encoder.feature_dim if hasattr(tactile_encoder, 'feature_dim') else 512,
+            tactile_encoder.latent_dim,
             hidden_dim,
             kernel_size=1
         )
         self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
+        self.vision_source_embed = nn.Embedding(len(camera_names), hidden_dim)
+        self.tactile_source_embed = nn.Embedding(len(tactile_names), hidden_dim)
 
         # 3. 视触觉交叉注意力融合
         self.cross_modal_fusion = BiDirectionalCrossAttention(
             d_model=hidden_dim,
-            nhead=8,
+            nhead=nheads,
             num_layers=cross_attn_layers,
             dropout=0.1
         )
@@ -161,7 +178,8 @@ class VTLAModel(nn.Module):
         tac_image: torch.Tensor,
         actions: Optional[torch.Tensor] = None,
         is_pad: Optional[torch.Tensor] = None,
-        return_components: bool = False
+        return_components: bool = False,
+        deterministic_latent: bool = False,
     ):
         """
         Args:
@@ -203,7 +221,7 @@ class VTLAModel(nn.Module):
             latent_info = self.latent_proj(encoder_output)
             mu = latent_info[:, :self.latent_dim]
             logvar = latent_info[:, self.latent_dim:]
-            latent_sample = reparametrize(mu, logvar)
+            latent_sample = mu if deterministic_latent else reparametrize(mu, logvar)
             latent_input = self.latent_out_proj(latent_sample)
         else:
             mu = logvar = None
@@ -212,23 +230,25 @@ class VTLAModel(nn.Module):
 
         # ===== 2. 视觉特征提取 =====
         all_vision_features = []
-        all_vision_pos = []
 
         for cam_id in range(len(self.camera_names)):
             features, pos = self.vision_backbone(cam_image[:, cam_id])
             features = features[0]  # 最后一层特征
             pos = pos[0]
-            all_vision_features.append(self.vision_input_proj(features))
-            all_vision_pos.append(pos)
+            projected = self.vision_input_proj(features)
+            if pos.shape[1] != self.hidden_dim:
+                raise ValueError(
+                    f"Vision position embedding has {pos.shape[1]} channels; "
+                    f"expected hidden_dim={self.hidden_dim}"
+                )
+            source = self.vision_source_embed.weight[cam_id].view(1, -1, 1, 1)
+            all_vision_features.append(projected + pos + source)
 
         # 拼接所有相机的视觉特征
         if len(all_vision_features) > 0:
             vision_features = torch.cat(
                 [f.flatten(2) for f in all_vision_features], dim=2
             )  # [B, D, N_v]
-            vision_pos = torch.cat(
-                [p.flatten(2) for p in all_vision_pos], dim=2
-            )
             vision_tokens = vision_features.permute(0, 2, 1)  # [B, N_v, D]
         else:
             vision_tokens = None
@@ -240,7 +260,13 @@ class VTLAModel(nn.Module):
             tac_feat = self.tactile_encoder(
                 tac_image[:, tac_id], return_tokens=True
             )  # [B, D, H', W']
-            all_tactile_features.append(tac_feat)
+            tac_feat = self.tactile_input_proj(tac_feat)
+            tactile_pos = get_2d_sinusoid_encoding(
+                tac_feat.shape[-2], tac_feat.shape[-1], self.hidden_dim,
+                tac_feat.device, tac_feat.dtype,
+            )
+            source = self.tactile_source_embed.weight[tac_id].view(1, -1, 1, 1)
+            all_tactile_features.append(tac_feat + tactile_pos + source)
 
         # 拼接所有触觉传感器的特征
         if len(all_tactile_features) > 0:
@@ -273,7 +299,9 @@ class VTLAModel(nn.Module):
 
         # 位置编码
         N_tokens = src.shape[0]
-        pos_embed = torch.zeros(N_tokens, 1, self.hidden_dim, device=src.device)
+        pos_embed = torch.zeros(
+            N_tokens, bs, self.hidden_dim, device=src.device, dtype=src.dtype
+        )
 
         # 添加本体感觉和latent
         proprio_input = self.input_proj_robot_state(qpos)
@@ -356,6 +384,7 @@ class VTLAPolicy(nn.Module):
         self.kl_weight = _cfg(args_override, 'kl_weight', 10.0)
         self.refine_weight = _cfg(args_override, 'refine_weight', 0.5)
         self.contact_weight = _cfg(args_override, 'contact_weight', 0.1)
+        self.pad_weight = _cfg(args_override, 'pad_weight', 1.0)
         self.set_stage(stage)
 
     def set_stage(self, stage: str):
@@ -374,6 +403,11 @@ class VTLAPolicy(nn.Module):
                 p.requires_grad = True
             for p in head.refine_head.parameters():
                 p.requires_grad = False
+            for p in head.contact_detector.parameters():
+                p.requires_grad = False
+            if head.adaptive_scale:
+                for p in head.scale_predictor.parameters():
+                    p.requires_grad = False
             self.model.use_tactile_refine = False
         elif stage == 'stage3':
             for p in self.model.parameters():
@@ -390,6 +424,18 @@ class VTLAPolicy(nn.Module):
                 p.requires_grad = True
             self.model.use_tactile_refine = True
 
+    def train(self, mode: bool = True):
+        """Keep the frozen Stage-3 backbone, BatchNorm and dropout in eval mode."""
+        super().train(mode)
+        if mode and self.stage == 'stage3':
+            self.model.eval()
+            head = self.model.action_head
+            head.refine_head.train()
+            head.contact_detector.train()
+            if head.adaptive_scale:
+                head.scale_predictor.train()
+        return self
+
     def forward(self, qpos, cam_image, tac_image, actions=None, is_pad=None):
         """
         前向传播并计算损失（训练）或返回预测动作（推理）
@@ -399,7 +445,13 @@ class VTLAPolicy(nn.Module):
             is_pad = is_pad[:, :self.model.num_queries]
 
             a_hat, is_pad_hat, (mu, logvar), components = self.model(
-                qpos, cam_image, tac_image, actions, is_pad, return_components=True
+                qpos,
+                cam_image,
+                tac_image,
+                actions,
+                is_pad,
+                return_components=True,
+                deterministic_latent=(self.stage == 'stage3'),
             )
 
             loss_dict = self._compute_loss(
@@ -418,8 +470,14 @@ class VTLAPolicy(nn.Module):
 
         # 主动作L1损失
         all_l1 = F.l1_loss(a_hat, actions, reduction='none')
-        l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
+        valid = (~is_pad).unsqueeze(-1).expand_as(all_l1)
+        l1 = (all_l1 * valid).sum() / valid.sum().clamp_min(1)
         loss_dict['l1'] = l1
+
+        pad_loss = F.binary_cross_entropy_with_logits(
+            is_pad_hat.squeeze(-1), is_pad.float()
+        )
+        loss_dict['pad'] = pad_loss
 
         # KL散度
         total_kld = self._kl_divergence(mu, logvar)
@@ -434,24 +492,12 @@ class VTLAPolicy(nn.Module):
                 main_actions = components['main_actions']
                 # 主动作也应该接近GT
                 main_l1 = F.l1_loss(main_actions, actions, reduction='none')
-                main_l1 = (main_l1 * ~is_pad.unsqueeze(-1)).mean()
+                main_l1 = (main_l1 * valid).sum() / valid.sum().clamp_min(1)
                 loss_dict['main_l1'] = main_l1
 
-            # 接触检测损失（如果有GT标签）
-            # 这里假设在is_pad之外可以推断接触状态
-            # 简化：将非padding的后半段视为更可能接触
-            if 'contact_prob' in components:
-                contact_prob = components['contact_prob'].squeeze(-1)  # [B, T]
-                # 启发式：假设后半段更可能接触
-                T = contact_prob.shape[1]
-                contact_gt = torch.zeros_like(contact_prob)
-                contact_gt[:, T//2:] = 1.0  # 后半段标记为接触
-                contact_loss = F.binary_cross_entropy(
-                    contact_prob[~is_pad], contact_gt[~is_pad]
-                )
-                loss_dict['contact'] = contact_loss
-            else:
-                loss_dict['contact'] = torch.tensor(0.0, device=l1.device)
+            # 数据集中没有可信接触标签。检测器仍可通过动作残差路径学习，
+            # 但不能用“轨迹后半段=接触”这种伪标签进行监督。
+            loss_dict['contact'] = torch.tensor(0.0, device=l1.device)
         else:
             loss_dict['main_l1'] = torch.tensor(0.0, device=l1.device)
             loss_dict['contact'] = torch.tensor(0.0, device=l1.device)
@@ -459,8 +505,8 @@ class VTLAPolicy(nn.Module):
         # 总损失
         loss_dict['loss'] = (
             loss_dict['l1'] +
-            self.kl_weight * loss_dict['kl'] +
-            self.refine_weight * loss_dict['main_l1'] +
+            (0.0 if self.stage == 'stage3' else self.kl_weight * loss_dict['kl']) +
+            (0.0 if self.stage == 'stage3' else self.pad_weight * loss_dict['pad']) +
             self.contact_weight * loss_dict['contact']
         )
 
@@ -504,7 +550,7 @@ def build_vtla_model(args):
     tactile_encoder = TactileEncoder(
         backbone=_cfg(args, 'tactile_backbone', 'resnet34'),
         latent_dim=_cfg(args, 'tactile_latent_dim', 512),
-        pretrained=True,
+        pretrained=_cfg(args, 'pretrained_backbones', True),
         freeze_backbone=False
     )
 
@@ -534,6 +580,7 @@ def build_vtla_model(args):
         camera_names=args.camera_names,
         tactile_names=args.tactile_names,
         hidden_dim=args.hidden_dim,
+        nheads=args.nheads,
         cross_attn_layers=_cfg(args, 'cross_attn_layers', 2),
         use_tactile_refine=_cfg(args, 'use_tactile_refine', True),
         refine_scale=_cfg(args, 'refine_scale', 0.1)
