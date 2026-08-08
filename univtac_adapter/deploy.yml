@@ -1,0 +1,15 @@
+# Exact UniVTAC deployment configuration for the completed Stage-2 run.
+policy_name: VTLA
+seed: 0
+instruction_type: seen
+instuction_file: null
+
+project_dir: /home/rmc/workspace/VTLA_design
+checkpoint: /home/rmc/workspace/VTLA_design/runs/stage2/20260809_014410_d04cb96_gpu123/checkpoints/stage2_epoch_500.ckpt
+stage: stage2
+device: cuda:0
+
+# Re-plan at every simulator observation and execute the first action in the
+# predicted chunk. Bound normalized outputs before converting to joint units.
+action_step: 0
+normalized_action_clip: 5.0

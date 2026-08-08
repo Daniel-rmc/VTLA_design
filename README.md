@@ -10,6 +10,32 @@
 ./start_training_multigpu.sh stage2 3 1,2,3
 ```
 
+## UniVTAC 评测
+
+最终 checkpoint 可通过仓库内的适配器接入 UniVTAC 统一评测。首次运行 Isaac Sim 时，必须由用户本人阅读并接受 NVIDIA Omniverse EULA：
+
+```bash
+/home/rmc/miniconda/envs/UniVTAC/bin/python -c "import isaacsim"
+```
+
+接受后，在物理 GPU 3 上执行 100 个 `grasp_classify/demo` episode：
+
+```bash
+/home/rmc/miniconda/envs/UniVTAC/bin/python run_univtac_eval.py \
+    --gpu 3 --total-num 100
+```
+
+适配器位于 `univtac_adapter/`，使用训练时相同的双相机、原始触觉 RGB、ImageNet 图像归一化和 checkpoint 关节统计。UniVTAC 原始视频/metadata 保存在其 `eval_result/`，本次请求、配置、完整日志和结构化结果同时归档到训练 run 的 `eval/univtac/` 目录。
+
+在启动耗时较长的模拟器前，可先做确定性离线部署检查：
+
+```bash
+CUDA_VISIBLE_DEVICES=3 /home/rmc/miniconda/envs/UniVTAC/bin/python eval_vtla_offline.py \
+    --checkpoint runs/stage2/20260809_014410_d04cb96_gpu123/checkpoints/stage2_epoch_500.ckpt \
+    --dataset-dir /home/rmc/workspace/UniVTAC/data/grasp_classify/demo \
+    --output runs/stage2/20260809_014410_d04cb96_gpu123/eval/offline_result.json
+```
+
 ## 🎯 核心创新
 
 1. **独立触觉编码器**：不与视觉共享参数，专门处理触觉传感器数据
