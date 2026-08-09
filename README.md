@@ -27,6 +27,15 @@
 
 适配器位于 `univtac_adapter/`，使用训练时相同的双相机、原始触觉 RGB、ImageNet 图像归一化和 checkpoint 关节统计。UniVTAC 原始视频/metadata 保存在其 `eval_result/`，本次请求、配置、完整日志和结构化结果同时归档到训练 run 的 `eval/univtac/` 目录。
 
+如果评测按多个 GPU/seed 区间并行运行，可按 seed 去重合并为一个结果：
+
+```bash
+/home/rmc/miniconda/envs/UniVTAC/bin/python summarize_univtac_eval.py \
+    --result-root /home/rmc/workspace/UniVTAC/eval_result/VTLA/grasp_classify/deploy \
+    --start-seed 1000000 --end-seed 1000099 \
+    --output runs/stage2/20260809_014410_d04cb96_gpu123/eval/univtac/aggregate_result.json
+```
+
 在启动耗时较长的模拟器前，可先做确定性离线部署检查：
 
 ```bash
