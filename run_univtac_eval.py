@@ -165,14 +165,25 @@ def main():
             exit_code = 130
 
     new_results = sorted(set(result_root.iterdir()) - preexisting) if result_root.is_dir() else []
+    # Concurrent shards share result_root and can all appear as "new" to each
+    # wrapper. Associate a shard with this request by its explicit start seed.
+    matching_results = []
+    result_log_text = ""
+    for result_dir in new_results:
+        result_log = result_dir / "log.log"
+        text = result_log.read_text(encoding="utf-8", errors="replace") if result_log.is_file() else ""
+        if args.start_seed == -1 or re.search(rf"Seed\s+{args.start_seed}\b", text):
+            matching_results.append(result_dir)
+            result_log_text += text
     final_match = re.findall(
-        r"Final Result:\s*(\d+)/(\d+)\(([\d.]+)%\) success", output_tail
+        r"Final Result:\s*(\d+)/(\d+)\(([\d.]+)%\) success",
+        result_log_text or output_tail,
     )
     summary = {
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
         "exit_code": exit_code,
         "interrupted": interrupted,
-        "univtac_result_dirs": [str(path.resolve()) for path in new_results],
+        "univtac_result_dirs": [str(path.resolve()) for path in matching_results],
         "final_result": None,
     }
     if final_match:

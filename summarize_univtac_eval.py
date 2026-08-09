@@ -76,6 +76,38 @@ def summarize(result_root: Path, start_seed: int, end_seed: int) -> dict:
     failures = sum(record["status"] == "failed" for record in selected)
     completed = len(selected)
 
+    requested_error_events = [error for error in all_errors if error["seed"] in requested]
+    resolved_error_events = [error for error in requested_error_events if error["seed"] in by_seed]
+    unresolved_error_events = [error for error in requested_error_events if error["seed"] not in by_seed]
+
+    finalized_video_re = re.compile(r"(?P<seed>\d+)_(?:success|failed)\.mp4$")
+    finalized_video_seeds: dict[int, list[str]] = {}
+    unfinalized_videos = []
+    for video_path in sorted(result_root.glob("*/video/*.mp4")):
+        match = finalized_video_re.match(video_path.name)
+        if match:
+            seed = int(match.group("seed"))
+            if seed in requested:
+                finalized_video_seeds.setdefault(seed, []).append(str(video_path.resolve()))
+        else:
+            unfinalized_videos.append(str(video_path.resolve()))
+
+    metadata_seeds: dict[int, list[str]] = {}
+    metadata_read_errors = []
+    for metadata_path in sorted(result_root.glob("*/metadata.json")):
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            metadata_read_errors.append({"path": str(metadata_path.resolve()), "error": str(exc)})
+            continue
+        for seed_text in metadata:
+            try:
+                seed = int(seed_text)
+            except ValueError:
+                continue
+            if seed in requested:
+                metadata_seeds.setdefault(seed, []).append(str(metadata_path.resolve()))
+
     return {
         "evaluation_type": "UniVTAC simulator task success",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -89,7 +121,26 @@ def summarize(result_root: Path, start_seed: int, end_seed: int) -> dict:
         "complete": completed == len(requested) and not missing_seeds,
         "missing_seeds": missing_seeds,
         "duplicate_completed_seeds": duplicates,
-        "error_events": [error for error in all_errors if error["seed"] in requested],
+        "resolved_setup_error_events": resolved_error_events,
+        "unresolved_error_events": unresolved_error_events,
+        "artifacts": {
+            "finalized_video_seed_count": len(finalized_video_seeds),
+            "missing_finalized_video_seeds": sorted(requested - set(finalized_video_seeds)),
+            "duplicate_finalized_video_seeds": {
+                str(seed): paths
+                for seed, paths in sorted(finalized_video_seeds.items())
+                if len(paths) > 1
+            },
+            "unfinalized_video_files": unfinalized_videos,
+            "metadata_seed_count": len(metadata_seeds),
+            "missing_metadata_seeds": sorted(requested - set(metadata_seeds)),
+            "duplicate_metadata_seeds": {
+                str(seed): paths
+                for seed, paths in sorted(metadata_seeds.items())
+                if len(paths) > 1
+            },
+            "metadata_read_errors": metadata_read_errors,
+        },
         "records": selected,
         "source_logs": [str(path.resolve()) for path in log_paths],
     }

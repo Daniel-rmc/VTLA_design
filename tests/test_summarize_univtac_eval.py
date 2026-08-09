@@ -21,6 +21,14 @@ def test_parse_and_merge_sharded_univtac_logs(tmp_path: Path):
         "steps: 10   , actions: 2    .\n",
         encoding="utf-8",
     )
+    (first / "video").mkdir()
+    (second / "video").mkdir()
+    (first / "video" / "10_success.mp4").touch()
+    (first / "video" / "11_failed.mp4").touch()
+    (second / "video" / "12_success.mp4").touch()
+    (second / "video" / "13.mp4").touch()
+    (first / "metadata.json").write_text('{"10": {}, "11": {}}', encoding="utf-8")
+    (second / "metadata.json").write_text('{"12": {}}', encoding="utf-8")
 
     records, errors = parse_log(second / "log.log")
     assert records[0]["seed"] == 12
@@ -32,4 +40,10 @@ def test_parse_and_merge_sharded_univtac_logs(tmp_path: Path):
     assert result["failures"] == 1
     assert result["success_rate_percent"] == 200 / 3
     assert result["missing_seeds"] == [13]
+    assert len(result["resolved_setup_error_events"]) == 1
+    assert not result["unresolved_error_events"]
+    assert result["artifacts"]["missing_finalized_video_seeds"] == [13]
+    assert result["artifacts"]["metadata_seed_count"] == 3
+    assert result["artifacts"]["missing_metadata_seeds"] == [13]
+    assert len(result["artifacts"]["unfinalized_video_files"]) == 1
     assert not result["complete"]
