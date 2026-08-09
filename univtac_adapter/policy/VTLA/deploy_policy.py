@@ -162,15 +162,21 @@ class Policy(BasePolicy):
         ]
         return qpos, torch.stack(camera_images).unsqueeze(0), torch.stack(tactile_images).unsqueeze(0)
 
-    @torch.inference_mode()
     def eval(self, task, observation):
-        qpos, camera_images, tactile_images = self.encode_obs(observation)
-        normalized_actions = self.model(qpos, camera_images, tactile_images)
-        normalized_action = normalized_actions[0, self.action_step]
-        normalized_action = normalized_action.clamp(
-            -self.normalized_action_clip, self.normalized_action_clip
-        )
-        action = normalized_action * self.joint_std + self.joint_mean
+        # Keep inference mode strictly around VTLA. Wrapping task.take_action()
+        # would cause IsaacLab state tensors to become inference tensors, which
+        # cannot be updated in-place during the next environment reset.
+        with torch.inference_mode():
+            qpos, camera_images, tactile_images = self.encode_obs(observation)
+            normalized_actions = self.model(qpos, camera_images, tactile_images)
+            normalized_action = normalized_actions[0, self.action_step]
+            normalized_action = normalized_action.clamp(
+                -self.normalized_action_clip, self.normalized_action_clip
+            )
+            action = normalized_action * self.joint_std + self.joint_mean
+
+        # clone() outside inference mode produces a normal tensor for IsaacLab.
+        action = action.clone()
 
         # Both finger joints in the recorded 9D state represent the same
         # gripper command. UniVTAC accepts only one of them.
