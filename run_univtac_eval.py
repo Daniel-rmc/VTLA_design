@@ -95,6 +95,12 @@ def main():
 
     environment = os.environ.copy()
     environment["CUDA_VISIBLE_DEVICES"] = args.gpu
+    # An absolute Python path does not activate its Conda environment. Add the
+    # environment's bin directory explicitly so UniVTAC can launch ffmpeg and
+    # other runtime tools installed alongside Python.
+    environment["PATH"] = os.pathsep.join(
+        (str(args.python.parent.resolve()), environment.get("PATH", ""))
+    )
     adapter_root = str((Path(__file__).parent / "univtac_adapter").resolve())
     python_paths = [adapter_root, str(args.univtac_root.resolve())]
     if environment.get("PYTHONPATH"):
@@ -106,6 +112,7 @@ def main():
         "command": command,
         "cwd": str(args.univtac_root.resolve()),
         "cuda_visible_devices": args.gpu,
+        "environment_bin": str(args.python.parent.resolve()),
         "task": args.task,
         "task_config": str(task_config_path.resolve()),
         "deploy_config": str(args.deploy_config.resolve()),
@@ -128,6 +135,7 @@ def main():
     )
     preexisting = set(result_root.iterdir()) if result_root.is_dir() else set()
     output_tail = ""
+    interrupted = False
     with (archive_dir / "stdout.log").open("w", encoding="utf-8") as log_file:
         process = subprocess.Popen(
             command,
@@ -138,13 +146,23 @@ def main():
             text=True,
             bufsize=1,
         )
-        assert process.stdout is not None
-        for line in process.stdout:
-            sys.stdout.write(line)
-            log_file.write(line)
-            log_file.flush()
-            output_tail = (output_tail + line)[-1_000_000:]
-        exit_code = process.wait()
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                sys.stdout.write(line)
+                log_file.write(line)
+                log_file.flush()
+                output_tail = (output_tail + line)[-1_000_000:]
+            exit_code = process.wait()
+        except KeyboardInterrupt:
+            interrupted = True
+            process.terminate()
+            try:
+                exit_code = process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            exit_code = 130
 
     new_results = sorted(set(result_root.iterdir()) - preexisting) if result_root.is_dir() else []
     final_match = re.findall(
@@ -153,6 +171,7 @@ def main():
     summary = {
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
         "exit_code": exit_code,
+        "interrupted": interrupted,
         "univtac_result_dirs": [str(path.resolve()) for path in new_results],
         "final_result": None,
     }
