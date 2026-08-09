@@ -174,7 +174,8 @@ python train_vtla.py \
     --dataset_dir /path/to/robot_data \
     --camera_names cam_high cam_left cam_right \
     --tactile_names tac_left tac_right \
-    --state_dim 14 \
+    --state_dim 8 \
+    --joint_indices 0 1 2 3 4 5 6 7 \
     --chunk_size 100 \
     --hidden_dim 512 \
     --nheads 8 \

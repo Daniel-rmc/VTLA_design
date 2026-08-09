@@ -83,6 +83,12 @@ def build_run_config(
             'cuda_runtime': torch.version.cuda,
             'cudnn': torch.backends.cudnn.version(),
             'cuda_visible_devices': gpu_ids,
+            'nccl_version': _jsonable(torch.cuda.nccl.version()) if torch.cuda.is_available() else None,
+            'nccl_environment': {
+                key: os.environ.get(key)
+                for key in ('NCCL_P2P_DISABLE', 'NCCL_IB_DISABLE', 'NCCL_CUMEM_ENABLE')
+                if os.environ.get(key) is not None
+            },
             'gpus': gpu_info,
         },
     }
@@ -108,16 +114,30 @@ def write_run_config(run_dir: str, config: Dict[str, Any]) -> Path:
     return config_path
 
 
-def append_epoch_metrics(run_dir: str, stage: str, epoch: int, losses: Dict[str, Any]) -> None:
+def _mean_losses(losses: Optional[Dict[str, Any]]) -> Optional[Dict[str, Optional[float]]]:
+    if losses is None:
+        return None
+    return {
+        key: float(np.mean(values)) if len(values) else None
+        for key, values in losses.items()
+    }
+
+
+def append_epoch_metrics(
+    run_dir: str,
+    stage: str,
+    epoch: int,
+    losses: Dict[str, Any],
+    validation_losses: Optional[Dict[str, Any]] = None,
+) -> None:
     path = Path(run_dir)
     path.mkdir(parents=True, exist_ok=True)
     record = {
         'stage': stage,
         'epoch': epoch + 1,
-        'losses': {
-            key: float(np.mean(values)) if len(values) else None
-            for key, values in losses.items()
-        },
+        'losses': _mean_losses(losses),
     }
+    if validation_losses is not None:
+        record['validation_losses'] = _mean_losses(validation_losses)
     with (path / 'metrics.jsonl').open('a', encoding='utf-8') as stream:
         stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + '\n')

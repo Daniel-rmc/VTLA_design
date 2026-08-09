@@ -23,17 +23,20 @@ Review date: 2026-08-09
 
 ## Validation evidence
 
-- Four unit tests cover timestep sampling, Stage 1 marker shapes, 2-D positions, and refinement scaling.
+- Eleven tests cover timestep sampling, both UniVTAC tactile-key layouts, raw-9D to native-8D projection, deterministic stratified episode splitting, Stage 1 marker shapes, deployment tensor ownership, 2-D positions, evaluation aggregation, and refinement scaling.
 - A complete one-epoch DDP smoke run succeeded on physical GPUs `1,2,3` with two cameras, two tactile sensors, batch size 32/GPU, and effective batch size 96.
 - The smoke run used 9.14 GiB peak allocated memory per L40S.
 - One-epoch Stage 1 and Stage 3 regression runs also completed, including checkpoint transfer and the frozen-backbone path.
+- A new official-data smoke run succeeded with 100 published episodes (90 train/10 validation), native 8D control, batch size 64/GPU, effective batch 192, and BF16. It used 12.46 GiB peak memory per L40S and completed both validation and strict checkpoint deployment.
+- NCCL 2.21.5 P2P collectives currently hang on this host. A minimal three-GPU health check identified the failing path; `NCCL_P2P_DISABLE=1` completes correctly and is now recorded by the launcher.
 
 ## Remaining design limitations
 
 - The implementation has no language input, tokenizer, or language encoder. It is currently a vision-tactile-action (VTA) policy despite the VTLA name.
 - The source HDF5 files do not contain a dedicated action field. The loader explicitly uses the next joint positions as an action proxy; a production imitation-learning run should store commanded actions.
-- Only five demonstration episodes (271 timestep samples) are available. There is no held-out validation/test split or task-success evaluation, so this run verifies optimization and infrastructure, not generalization.
+- The historical `20260809_014410` run used only five locally collected demonstration episodes (271 timestep samples), so its 8% simulator result is an infrastructure baseline rather than a representative official-data result. The current pipeline targets all 100 published `grasp_classify/clean` episodes and uses a deterministic episode-level 90/10 train/validation split.
+- Published UniVTAC observations contain nine joint values, while its policy API consumes eight commands. The current pipeline explicitly selects raw columns `0..7` and trains/deploys a native 8D policy; 9D conversion remains only for reproducing historical checkpoints.
 - The dataset has no trustworthy contact labels. Stage 3 can receive gradients through the residual action objective, but contact detection cannot be quantitatively supervised or evaluated yet.
-- Checkpoints contain normalization statistics, but a deployment/inference pipeline still needs to apply those statistics and de-normalize predicted actions.
+- The current task still has no explicit rough/plain auxiliary classification objective; classification is learned only through conditional action imitation.
 
 Each run is stored under `runs/<stage>/<timestamp>_<git>_<gpus>/` with `config.json`, `launch_command.sh`, `train.log`, `metrics.jsonl`, checkpoints, and an eventual `exit_code`.

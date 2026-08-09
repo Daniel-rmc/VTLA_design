@@ -5,11 +5,13 @@ set -euo pipefail
 
 PROJECT_DIR="/home/rmc/workspace/VTLA_design"
 PYTHON_BIN="/home/rmc/miniconda/envs/UniVTAC/bin/python"
-DATASET_DIR="${DATASET_DIR:-/home/rmc/workspace/UniVTAC/data/grasp_classify/demo}"
+DATASET_DIR="${DATASET_DIR:-/home/rmc/workspace/UniVTAC/data/official/grasp_classify/clean}"
+DATASET_MANIFEST="${DATASET_MANIFEST:-${PROJECT_DIR}/data_manifests/grasp_classify_clean_modelscope.json}"
 STAGE="${1:-stage2}"
 NUM_GPUS="${2:-3}"
 REQUESTED_GPU_IDS="${3:-${GPU_IDS:-}}"
 MIN_FREE_MEMORY_MB="${MIN_FREE_MEMORY_MB:-20000}"
+NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
 
 if [[ ! "${STAGE}" =~ ^stage[123]$ ]]; then
     echo "Error: stage must be stage1, stage2, or stage3" >&2
@@ -62,9 +64,9 @@ case "${STAGE}" in
         EXTRA_ARGS="--tactile_supervise rgb marker"
         ;;
     stage2)
-        BATCH_SIZE="${BATCH_SIZE:-32}"
-        NUM_EPOCHS="${NUM_EPOCHS:-500}"
-        EXTRA_ARGS="--camera_names cam_high cam_wrist --chunk_size 50"
+        BATCH_SIZE="${BATCH_SIZE:-64}"
+        NUM_EPOCHS="${NUM_EPOCHS:-150}"
+        EXTRA_ARGS="--camera_names cam_high cam_wrist --chunk_size 50 --joint_indices 0 1 2 3 4 5 6 7 --val_fraction 0.1 --val_seed 20260809 --val_freq 5 --amp_dtype bfloat16"
         latest_stage1=$(ls -t "${PROJECT_DIR}"/runs/stage1/*/checkpoints/stage1_epoch_*.ckpt 2>/dev/null | head -n 1 || true)
         if [[ -n "${latest_stage1}" ]]; then
             EXTRA_ARGS+=" --stage1_ckpt ${latest_stage1}"
@@ -73,7 +75,7 @@ case "${STAGE}" in
     stage3)
         BATCH_SIZE="${BATCH_SIZE:-32}"
         NUM_EPOCHS="${NUM_EPOCHS:-200}"
-        EXTRA_ARGS="--camera_names cam_high cam_wrist --chunk_size 50"
+        EXTRA_ARGS="--camera_names cam_high cam_wrist --chunk_size 50 --joint_indices 0 1 2 3 4 5 6 7 --val_fraction 0.1 --val_seed 20260809 --val_freq 5 --amp_dtype bfloat16"
         latest_stage2=$(ls -t "${PROJECT_DIR}"/runs/stage2/*/checkpoints/stage2_epoch_*.ckpt 2>/dev/null | head -n 1 || true)
         if [[ -z "${latest_stage2}" ]]; then
             echo "Error: Stage 3 requires a Stage 2 checkpoint" >&2
@@ -93,11 +95,23 @@ LOG_FILE="${RUN_DIR}/train.log"
 EXIT_FILE="${RUN_DIR}/exit_code"
 SESSION_NAME="vtla_${STAGE}_${RUN_NAME}"
 SAVE_FREQ="${SAVE_FREQ:-10}"
-NUM_WORKERS="${NUM_WORKERS:-4}"
+NUM_WORKERS="${NUM_WORKERS:-8}"
+
+if [[ "${STAGE}" != "stage1" ]]; then
+    if [[ ! -f "${DATASET_MANIFEST}" ]]; then
+        echo "Error: validated dataset manifest not found: ${DATASET_MANIFEST}" >&2
+        exit 1
+    fi
+    episode_count=$(find "${DATASET_DIR}" -maxdepth 1 -type f -name '*.hdf5' | wc -l)
+    if [[ "${episode_count}" -ne 100 ]]; then
+        echo "Error: expected 100 official episodes in ${DATASET_DIR}, found ${episode_count}" >&2
+        exit 1
+    fi
+fi
 
 mkdir -p "${CKPT_DIR}"
 
-TRAIN_CMD="set -o pipefail; cd ${PROJECT_DIR}; env CUDA_VISIBLE_DEVICES=${GPU_IDS_CSV} PYTHONPATH=${PROJECT_DIR}:${PROJECT_DIR}/../UniVTAC:${PROJECT_DIR}/../UniVTAC/policy/ACT ${PYTHON_BIN} train_vtla_multigpu.py --stage ${STAGE} --num_gpus ${NUM_GPUS} --dataset_dir ${DATASET_DIR} --tactile_names tac_left tac_right --state_dim 9 --batch_size ${BATCH_SIZE} --num_epochs ${NUM_EPOCHS} --ckpt_dir ${CKPT_DIR} --run_dir ${RUN_DIR} --num_workers ${NUM_WORKERS} --save_freq ${SAVE_FREQ} ${EXTRA_ARGS} 2>&1 | tee ${LOG_FILE}; code=\${PIPESTATUS[0]}; echo \${code} > ${EXIT_FILE}; exit \${code}"
+TRAIN_CMD="set -o pipefail; cd ${PROJECT_DIR}; env PYTHONUNBUFFERED=1 NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE} CUDA_VISIBLE_DEVICES=${GPU_IDS_CSV} PYTHONPATH=${PROJECT_DIR}:${PROJECT_DIR}/../UniVTAC:${PROJECT_DIR}/../UniVTAC/policy/ACT ${PYTHON_BIN} train_vtla_multigpu.py --stage ${STAGE} --num_gpus ${NUM_GPUS} --dataset_dir ${DATASET_DIR} --dataset_manifest ${DATASET_MANIFEST} --tactile_names tac_left tac_right --state_dim 8 --batch_size ${BATCH_SIZE} --num_epochs ${NUM_EPOCHS} --ckpt_dir ${CKPT_DIR} --run_dir ${RUN_DIR} --num_workers ${NUM_WORKERS} --save_freq ${SAVE_FREQ} ${EXTRA_ARGS} 2>&1 | tee ${LOG_FILE}; code=\${PIPESTATUS[0]}; echo \${code} > ${EXIT_FILE}; exit \${code}"
 
 printf '%s\n' "${TRAIN_CMD}" > "${RUN_DIR}/launch_command.sh"
 chmod +x "${RUN_DIR}/launch_command.sh"
@@ -108,6 +122,7 @@ echo "  tmux session: ${SESSION_NAME}"
 echo "  physical GPUs: ${GPU_IDS_CSV}"
 echo "  batch/GPU: ${BATCH_SIZE}"
 echo "  effective batch: $((BATCH_SIZE * NUM_GPUS))"
+echo "  NCCL_P2P_DISABLE: ${NCCL_P2P_DISABLE}"
 echo "  epochs: ${NUM_EPOCHS}"
 echo "  run directory: ${RUN_DIR}"
 echo "  log: ${LOG_FILE}"

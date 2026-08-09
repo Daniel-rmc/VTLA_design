@@ -436,7 +436,15 @@ class VTLAPolicy(nn.Module):
                 head.scale_predictor.train()
         return self
 
-    def forward(self, qpos, cam_image, tac_image, actions=None, is_pad=None):
+    def forward(
+        self,
+        qpos,
+        cam_image,
+        tac_image,
+        actions=None,
+        is_pad=None,
+        deterministic_latent=False,
+    ):
         """
         前向传播并计算损失（训练）或返回预测动作（推理）
         """
@@ -451,7 +459,7 @@ class VTLAPolicy(nn.Module):
                 actions,
                 is_pad,
                 return_components=True,
-                deterministic_latent=(self.stage == 'stage3'),
+                deterministic_latent=(deterministic_latent or self.stage == 'stage3'),
             )
 
             loss_dict = self._compute_loss(

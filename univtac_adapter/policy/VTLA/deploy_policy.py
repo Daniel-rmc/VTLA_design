@@ -57,7 +57,7 @@ def _resolve_tactile(observation: Mapping, name: str) -> torch.Tensor:
 
 
 def _to_univtac_qpos(action: torch.Tensor) -> torch.Tensor:
-    """Map 7 arm + 2 finger positions to UniVTAC's 7 arm + 1 gripper API."""
+    """Keep native 8D actions and support historical 9D checkpoints."""
     if action.numel() == 8:
         return action
     if action.numel() != 9:
@@ -116,6 +116,9 @@ class Policy(BasePolicy):
         self.camera_names = list(training["camera_names"])
         self.tactile_names = list(training["tactile_names"])
         self.state_dim = int(training["state_dim"])
+        self.joint_indices = [
+            int(index) for index in stats.get("joint_indices", range(self.state_dim))
+        ]
         self.action_step = int(args.get("action_step", 0))
         self.normalized_action_clip = float(args.get("normalized_action_clip", 5.0))
         self.task_name = str(args.get("task_name", "unknown"))
@@ -123,6 +126,11 @@ class Policy(BasePolicy):
         if self.joint_mean.numel() != self.state_dim:
             raise ValueError(
                 f"Checkpoint stats have {self.joint_mean.numel()} dimensions, "
+                f"but the model expects {self.state_dim}"
+            )
+        if len(self.joint_indices) != self.state_dim:
+            raise ValueError(
+                f"Checkpoint selects {len(self.joint_indices)} raw joint columns, "
                 f"but the model expects {self.state_dim}"
             )
         if not 0 <= self.action_step < int(training["chunk_size"]):
@@ -136,18 +144,20 @@ class Policy(BasePolicy):
 
         print(
             f"Loaded VTLA epoch {checkpoint.get('epoch', 'unknown')} from {checkpoint_path}; "
-            f"cameras={self.camera_names}, tactile={self.tactile_names}, stage={stage}"
+            f"cameras={self.camera_names}, tactile={self.tactile_names}, stage={stage}, "
+            f"control={self.state_dim}D indices={self.joint_indices}"
         )
 
     def encode_obs(self, observation: Mapping) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         qpos = torch.as_tensor(
             observation["embodiment"]["joint"], dtype=torch.float32, device=self.device
         ).flatten()
-        if qpos.numel() != self.state_dim:
+        if not self.joint_indices or max(self.joint_indices) >= qpos.numel():
             raise ValueError(
                 f"UniVTAC observation has {qpos.numel()} joint positions, "
-                f"but VTLA expects {self.state_dim}"
+                f"but VTLA selects raw columns {self.joint_indices}"
             )
+        qpos = qpos[self.joint_indices]
         qpos = ((qpos - self.joint_mean) / self.joint_std).unsqueeze(0)
 
         camera_images = [
@@ -178,8 +188,8 @@ class Policy(BasePolicy):
         # clone() outside inference mode produces a normal tensor for IsaacLab.
         action = action.clone()
 
-        # Both finger joints in the recorded 9D state represent the same
-        # gripper command. UniVTAC accepts only one of them.
+        # New checkpoints already emit UniVTAC-native 8D commands. The helper
+        # preserves deployment compatibility for historical 9D checkpoints.
         action = _to_univtac_qpos(action)
         action[-1] = action[-1].clamp(0.0, 0.039)
         task.take_action(action.to(task.device), action_type="qpos")

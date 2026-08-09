@@ -2,13 +2,19 @@
 
 一个用于接触丰富机器人操作任务的新型视触觉融合模型，具有独立触觉编码器和触觉感知动作微调机制。
 
-> 当前实现尚未接入语言编码器，因此严格来说是 Vision-Tactile-Action 策略。当前演示数据也没有独立 action 字段，训练加载器暂以“下一时刻关节位置”作为 action proxy。详见 [CODE_REVIEW.md](CODE_REVIEW.md)。
+> 当前实现尚未接入语言编码器，因此严格来说是 Vision-Tactile-Action 策略。UniVTAC 原始轨迹没有独立 action 字段，训练加载器遵循官方 ACT 预处理约定，以“下一时刻关节位置”构造 action。详见 [CODE_REVIEW.md](CODE_REVIEW.md)。
+
+正式训练使用 ModelScope 发布的 `grasp_classify/clean` 100 条轨迹。原始记录为 9D（7 个机械臂关节 + 两个重复手指位置），模型和 UniVTAC 控制接口统一为原生 8D（7 个机械臂关节 + 1 个夹爪），选取原始列 `0..7`。训练采用按 rough/plain 分层的固定 90/10 episode 级训练/验证划分。
 
 本地训练会为每次运行创建独立目录 `runs/<stage>/<run-name>/`，保存完整配置、Git 版本、GPU 映射、数据归一化统计、日志、逐 epoch 指标和 checkpoint。当前三卡命令为：
 
 ```bash
 ./start_training_multigpu.sh stage2 3 1,2,3
 ```
+
+默认配置为每卡 batch 64、全局 batch 192、BF16、150 epochs，每 5 epochs 在留出的 10 条轨迹上验证，并保存 `stage2_best.ckpt`。每个 run 的 `config.json` 会记录数据 manifest、episode 清单、8D 列选择、Git 版本、GPU 映射和完整启动命令。
+
+当前主机的 NCCL 2.21.5 在 L40S 间启用 P2P 时 collective 会超时；启动器默认设置 `NCCL_P2P_DISABLE=1`，使用已通过三卡 all-reduce 健康检查的共享内存通信路径，并把该设置记录到 run 配置。
 
 ## UniVTAC 评测
 
@@ -41,7 +47,7 @@
 ```bash
 CUDA_VISIBLE_DEVICES=3 /home/rmc/miniconda/envs/UniVTAC/bin/python eval_vtla_offline.py \
     --checkpoint runs/stage2/20260809_014410_d04cb96_gpu123/checkpoints/stage2_epoch_500.ckpt \
-    --dataset-dir /home/rmc/workspace/UniVTAC/data/grasp_classify/demo \
+    --dataset-dir /home/rmc/workspace/UniVTAC/data/official/grasp_classify/clean \
     --output runs/stage2/20260809_014410_d04cb96_gpu123/eval/offline_result.json
 ```
 
@@ -133,7 +139,8 @@ python train_vtla.py \
     --dataset_dir /path/to/robot_dataset \
     --camera_names cam_high cam_left \
     --tactile_names tac_left tac_right \
-    --state_dim 14 \
+    --state_dim 8 \
+    --joint_indices 0 1 2 3 4 5 6 7 \
     --chunk_size 100 \
     --batch_size 8 \
     --num_epochs 1000 \

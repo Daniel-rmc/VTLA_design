@@ -6,7 +6,13 @@ import h5py
 import numpy as np
 import torch
 
-from dataloader import TactilePretrainDataset, VTLADataset
+from dataloader import (
+    TactilePretrainDataset,
+    VTLADataset,
+    discover_episode_files,
+    infer_grasp_classify_label,
+    split_episode_files,
+)
 from models.action_heads import DualPathActionHead
 from models.vtla_policy import get_2d_sinusoid_encoding
 
@@ -27,6 +33,24 @@ def _write_dataset(root: Path) -> None:
             stream.create_dataset(f'tactile/{side}/marker', data=marker)
             stream.create_dataset(f'tactile/{side}/pose', data=np.zeros((4, 7), np.float32))
             stream.create_dataset(f'tactile/{side}/depth', data=np.full((4, 8, 10), 29.0))
+
+
+def _write_official_episode(root: Path, episode_id: int, label: str = 'plain') -> None:
+    image = np.full((4, 16, 20, 3), 128, dtype=np.uint8)
+    joints = np.arange(36, dtype=np.float32).reshape(4, 9) + episode_id
+    with h5py.File(root / f'{episode_id}.hdf5', 'w') as stream:
+        stream.create_dataset('embodiment/joint', data=joints)
+        stream.create_dataset('observation/head/rgb', data=image)
+        stream.create_dataset('observation/wrist/rgb', data=image)
+        rough_y, plain_y = ((0.0, -1.0) if label == 'rough' else (1.0, 0.0))
+        rough_pose = np.zeros((4, 7), dtype=np.float32)
+        plain_pose = np.zeros((4, 7), dtype=np.float32)
+        rough_pose[:, 1] = rough_y
+        plain_pose[:, 1] = plain_y
+        stream.create_dataset('actor/rough_prism', data=rough_pose)
+        stream.create_dataset('actor/plain_prism', data=plain_pose)
+        for side in ('left_gsmini', 'right_gsmini'):
+            stream.create_dataset(f'tactile/{side}/rgb', data=image)
 
 
 class DatasetTests(unittest.TestCase):
@@ -61,6 +85,41 @@ class DatasetTests(unittest.TestCase):
             sample = dataset[0]
             self.assertEqual(sample['targets']['marker'].shape, (63, 2))
             self.assertEqual(sample['targets']['depth'].shape, (1, 8, 10))
+
+    def test_published_layout_projects_raw_nine_dimensional_joints_to_native_eight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_official_episode(root, 0)
+            dataset = VTLADataset(
+                directory,
+                ['cam_high', 'cam_wrist'],
+                ['tac_left', 'tac_right'],
+                chunk_size=2,
+                state_dim=8,
+                joint_indices=range(8),
+                verbose=False,
+            )
+            self.assertEqual(dataset.raw_joint_dim, 9)
+            self.assertEqual(dataset.get_stats()['joint_indices'], list(range(8)))
+            self.assertEqual(dataset[0]['qpos'].shape, (8,))
+            self.assertEqual(dataset[0]['actions'].shape, (2, 8))
+
+    def test_episode_split_is_deterministic_and_disjoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for episode_id in range(10):
+                _write_official_episode(
+                    root, episode_id, label='plain' if episode_id < 6 else 'rough'
+                )
+            files = discover_episode_files(root)
+            labels = {path: infer_grasp_classify_label(path) for path in files}
+            train_a, val_a = split_episode_files(files, 0.2, 123, strata=labels)
+            train_b, val_b = split_episode_files(files, 0.2, 123, strata=labels)
+            self.assertEqual(train_a, train_b)
+            self.assertEqual(val_a, val_b)
+            self.assertEqual(len(train_a), 8)
+            self.assertEqual(len(val_a), 2)
+            self.assertFalse(set(train_a) & set(val_a))
 
 
 class ModelUnitTests(unittest.TestCase):

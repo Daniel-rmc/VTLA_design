@@ -30,11 +30,35 @@ def test_nine_dimensional_action_maps_to_univtac_gripper_api():
     assert mapped[-1].item() == action[7].item()
 
 
+def test_raw_nine_dimensional_observation_is_projected_to_native_eight():
+    policy = Policy.__new__(Policy)
+    policy.device = torch.device('cpu')
+    policy.joint_indices = list(range(8))
+    policy.joint_mean = torch.zeros(8)
+    policy.joint_std = torch.ones(8)
+    policy.camera_names = ['cam_high']
+    policy.tactile_names = ['tac_left', 'tac_right']
+    image = torch.zeros(12, 18, 3, dtype=torch.uint8)
+    observation = {
+        'embodiment': {'joint': torch.arange(9, dtype=torch.float32)},
+        'observation': {'head': {'rgb': image}},
+        'tactile': {
+            'left_tactile': {'rgb': image},
+            'right_tactile': {'rgb': image},
+        },
+    }
+    qpos, cameras, tactile = policy.encode_obs(observation)
+    assert qpos.shape == (1, 8)
+    assert torch.equal(qpos[0], torch.arange(8, dtype=torch.float32))
+    assert cameras.shape == (1, 1, 3, 256, 256)
+    assert tactile.shape == (1, 2, 3, 256, 256)
+
+
 def test_simulator_receives_a_normal_tensor_outside_inference_mode():
     class DummyModel:
         def __call__(self, qpos, cameras, tactile):
             assert torch.is_inference(qpos)
-            return torch.zeros(1, 1, 9)
+            return torch.zeros(1, 1, 8)
 
     class DummyTask:
         device = torch.device("cpu")
@@ -48,10 +72,10 @@ def test_simulator_receives_a_normal_tensor_outside_inference_mode():
     policy.model = DummyModel()
     policy.action_step = 0
     policy.normalized_action_clip = 5.0
-    policy.joint_mean = torch.zeros(9)
-    policy.joint_std = torch.ones(9)
+    policy.joint_mean = torch.zeros(8)
+    policy.joint_std = torch.ones(8)
     policy.encode_obs = lambda observation: (
-        torch.zeros(1, 9),
+        torch.zeros(1, 8),
         torch.zeros(1, 2, 3, 4, 4),
         torch.zeros(1, 2, 3, 4, 4),
     )

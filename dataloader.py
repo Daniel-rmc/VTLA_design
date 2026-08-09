@@ -1,7 +1,7 @@
 """HDF5 data loaders for the three VTLA training stages."""
 
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 import cv2
 import h5py
@@ -21,6 +21,10 @@ CAMERA_PATHS = {
 TACTILE_PATHS = {
     'tac_left': 'tactile/left_tactile/rgb',
     'tac_right': 'tactile/right_tactile/rgb',
+}
+TACTILE_PATH_CANDIDATES = {
+    'tac_left': ('tactile/left_tactile/rgb', 'tactile/left_gsmini/rgb'),
+    'tac_right': ('tactile/right_tactile/rgb', 'tactile/right_gsmini/rgb'),
 }
 
 
@@ -58,6 +62,98 @@ def _require_datasets(root: h5py.File, paths: Iterable[str], episode_path: Path)
         raise KeyError(f"{episode_path} is missing required datasets: {missing}")
 
 
+def resolve_tactile_path(root: h5py.File, name: str, episode_path: Path) -> str:
+    """Resolve local-collection and published GelSight Mini HDF5 key variants."""
+    candidates = TACTILE_PATH_CANDIDATES.get(
+        name, (TACTILE_PATHS.get(name, f'tactile/{name}/rgb'),)
+    )
+    for candidate in candidates:
+        if candidate in root:
+            return candidate
+    raise KeyError(
+        f"{episode_path} has no tactile RGB for {name}; checked {list(candidates)}"
+    )
+
+
+def _episode_sort_key(path: Path) -> Tuple[int, object]:
+    """Sort numeric UniVTAC episode names numerically, then other names lexically."""
+    try:
+        return (0, int(path.stem))
+    except ValueError:
+        return (1, path.name)
+
+
+def discover_episode_files(dataset_dir: str | Path) -> list[Path]:
+    """Find episodes in either collected ``hdf5/`` or published ``clean/`` layout."""
+    root = Path(dataset_dir).expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError(f"Dataset directory not found: {root}")
+
+    nested = root / 'hdf5'
+    hdf5_dir = nested if nested.is_dir() else root
+    episode_files = sorted(hdf5_dir.glob('*.hdf5'), key=_episode_sort_key)
+    if not episode_files:
+        raise ValueError(
+            f"No HDF5 files found in {root} (checked {nested} and {root})"
+        )
+    return episode_files
+
+
+def split_episode_files(
+    episode_files: Sequence[Path],
+    val_fraction: float,
+    seed: int,
+    strata: Optional[Mapping[Path, str]] = None,
+) -> tuple[list[Path], list[Path]]:
+    """Create a deterministic episode-level train/validation split."""
+    files = list(episode_files)
+    if not 0.0 <= val_fraction < 1.0:
+        raise ValueError(f"val_fraction must be in [0, 1), got {val_fraction}")
+    if val_fraction == 0.0:
+        return files, []
+    if len(files) < 2:
+        raise ValueError("At least two episodes are required for a validation split")
+
+    rng = np.random.default_rng(seed)
+    if strata is None:
+        groups = {'all': files}
+    else:
+        groups = {}
+        for path in files:
+            if path not in strata:
+                raise ValueError(f"No split stratum was provided for {path}")
+            groups.setdefault(strata[path], []).append(path)
+
+    val_set = set()
+    for group_files in groups.values():
+        if len(group_files) < 2:
+            raise ValueError("Every split stratum must contain at least two episodes")
+        val_count = max(1, int(round(len(group_files) * val_fraction)))
+        val_count = min(val_count, len(group_files) - 1)
+        permutation = rng.permutation(len(group_files))
+        val_set.update(group_files[index] for index in permutation[:val_count])
+    train_files = [path for path in files if path not in val_set]
+    val_files = [path for path in files if path in val_set]
+    return train_files, val_files
+
+
+def infer_grasp_classify_label(episode_path: str | Path) -> str:
+    """Identify which prism was active from the first recorded actor poses."""
+    path = Path(episode_path)
+    with h5py.File(path, 'r') as root:
+        required = ['actor/rough_prism', 'actor/plain_prism']
+        _require_datasets(root, required, path)
+        rough_y = float(root['actor/rough_prism'][0, 1])
+        plain_y = float(root['actor/plain_prism'][0, 1])
+    rough_active = abs(rough_y) < 0.5
+    plain_active = abs(plain_y) < 0.5
+    if rough_active == plain_active:
+        raise ValueError(
+            f"Could not infer active prism in {path}: rough_y={rough_y}, plain_y={plain_y}"
+        )
+    return 'rough' if rough_active else 'plain'
+
+
 class VTLADataset(Dataset):
     """One sample per trajectory timestep with a future joint-position chunk.
 
@@ -72,6 +168,9 @@ class VTLADataset(Dataset):
         tactile_names: Iterable[str],
         chunk_size: int = 100,
         state_dim: Optional[int] = None,
+        joint_indices: Optional[Iterable[int]] = None,
+        episode_files: Optional[Sequence[str | Path]] = None,
+        normalization_stats: Optional[Mapping[str, object]] = None,
         normalize_joints: bool = True,
         verbose: bool = True,
     ):
@@ -89,32 +188,67 @@ class VTLADataset(Dataset):
         if not self.tactile_names:
             raise ValueError("At least one tactile sensor must be configured")
 
-        hdf5_dir = self.dataset_dir / 'hdf5'
-        if not hdf5_dir.exists():
-            raise ValueError(f"HDF5 directory not found: {hdf5_dir}")
-
-        self.episode_files = sorted(hdf5_dir.glob('*.hdf5'))
+        self.episode_files = (
+            [Path(path).expanduser().resolve() for path in episode_files]
+            if episode_files is not None else discover_episode_files(self.dataset_dir)
+        )
         if not self.episode_files:
-            raise ValueError(f"No HDF5 files found in {hdf5_dir}")
+            raise ValueError("The selected episode list is empty")
 
-        required_paths = [
-            'embodiment/joint',
-            *(CAMERA_PATHS.get(name, f'observation/{name}/rgb') for name in self.camera_names),
-            *(TACTILE_PATHS.get(name, f'tactile/{name}/rgb') for name in self.tactile_names),
+        if joint_indices is None:
+            self.joint_indices = list(range(state_dim)) if state_dim is not None else None
+        else:
+            self.joint_indices = [int(index) for index in joint_indices]
+            if not self.joint_indices:
+                raise ValueError("joint_indices cannot be empty")
+            if len(set(self.joint_indices)) != len(self.joint_indices):
+                raise ValueError(f"joint_indices contain duplicates: {self.joint_indices}")
+            if min(self.joint_indices) < 0:
+                raise ValueError(f"joint_indices must be non-negative: {self.joint_indices}")
+        if state_dim is not None and self.joint_indices is not None:
+            if len(self.joint_indices) != state_dim:
+                raise ValueError(
+                    f"state_dim={state_dim} but {len(self.joint_indices)} joint indices were selected"
+                )
+
+        camera_paths = [
+            CAMERA_PATHS.get(name, f'observation/{name}/rgb') for name in self.camera_names
         ]
         self.samples = []
         all_joints = []
+        self.raw_joint_dim = None
+        self.tactile_paths_by_episode = {}
 
         for episode_path in self.episode_files:
+            if not episode_path.is_file():
+                raise ValueError(f"Episode file not found: {episode_path}")
             with h5py.File(episode_path, 'r') as root:
+                tactile_paths = {
+                    name: resolve_tactile_path(root, name, episode_path)
+                    for name in self.tactile_names
+                }
+                self.tactile_paths_by_episode[episode_path] = tactile_paths
+                required_paths = [
+                    'embodiment/joint', *camera_paths, *tactile_paths.values()
+                ]
                 _require_datasets(root, required_paths, episode_path)
                 joints = np.asarray(root['embodiment/joint'], dtype=np.float32)
                 if joints.ndim != 2:
                     raise ValueError(f"{episode_path}: joint data must be 2D, got {joints.shape}")
-                if state_dim is not None and joints.shape[1] != state_dim:
+                if self.raw_joint_dim is None:
+                    self.raw_joint_dim = int(joints.shape[1])
+                    if self.joint_indices is None:
+                        self.joint_indices = list(range(self.raw_joint_dim))
+                        self.state_dim = self.raw_joint_dim
+                elif joints.shape[1] != self.raw_joint_dim:
                     raise ValueError(
-                        f"{episode_path}: configured state_dim={state_dim}, "
-                        f"but joint data has dimension {joints.shape[1]}"
+                        f"{episode_path}: raw joint dimension {joints.shape[1]} differs from "
+                        f"the first episode dimension {self.raw_joint_dim}"
+                    )
+                if max(self.joint_indices) >= joints.shape[1]:
+                    raise ValueError(
+                        f"{episode_path}: selected joint indices {self.joint_indices} exceed "
+                        f"raw dimension {joints.shape[1]}"
                     )
                 for path in required_paths[1:]:
                     if len(root[path]) != len(joints):
@@ -124,30 +258,50 @@ class VTLADataset(Dataset):
                         )
                 if len(joints) < 2:
                     continue
-                all_joints.append(joints)
+                all_joints.append(joints[:, self.joint_indices])
                 self.samples.extend((episode_path, timestep) for timestep in range(len(joints) - 1))
 
         if not self.samples:
             raise ValueError("No trajectory contains enough frames to form a training sample")
 
-        joint_values = np.concatenate(all_joints, axis=0)
-        self.joint_mean = joint_values.mean(axis=0).astype(np.float32)
-        self.joint_std = np.maximum(joint_values.std(axis=0), 1e-2).astype(np.float32)
+        if normalization_stats is None:
+            joint_values = np.concatenate(all_joints, axis=0)
+            self.joint_mean = joint_values.mean(axis=0).astype(np.float32)
+            self.joint_std = np.maximum(joint_values.std(axis=0), 1e-2).astype(np.float32)
+            self.normalization_source = 'selected episodes'
+        else:
+            self.joint_mean = np.asarray(normalization_stats['joint_mean'], dtype=np.float32)
+            self.joint_std = np.asarray(normalization_stats['joint_std'], dtype=np.float32)
+            expected_shape = (len(self.joint_indices),)
+            if self.joint_mean.shape != expected_shape or self.joint_std.shape != expected_shape:
+                raise ValueError(
+                    f"Normalization stats must have shape {expected_shape}, got "
+                    f"mean={self.joint_mean.shape}, std={self.joint_std.shape}"
+                )
+            if np.any(self.joint_std <= 0):
+                raise ValueError("Normalization standard deviations must be positive")
+            self.normalization_source = 'provided training statistics'
 
         if verbose:
             print(
                 f"Found {len(self.episode_files)} episodes and "
-                f"{len(self.samples)} timestep samples"
+                f"{len(self.samples)} timestep samples; raw joints={self.raw_joint_dim}D, "
+                f"model joints={len(self.joint_indices)}D indices={self.joint_indices}"
             )
 
     def __len__(self) -> int:
         return len(self.samples)
 
-    def get_stats(self) -> Dict[str, np.ndarray]:
+    def get_stats(self) -> Dict[str, object]:
         return {
             'joint_mean': self.joint_mean.copy(),
             'joint_std': self.joint_std.copy(),
             'action_source': 'next embodiment/joint positions',
+            'raw_joint_dim': self.raw_joint_dim,
+            'state_dim': len(self.joint_indices),
+            'joint_indices': list(self.joint_indices),
+            'control_layout': '7 arm joints + 1 gripper command' if self.joint_indices == list(range(8)) else None,
+            'normalization_source': self.normalization_source,
         }
 
     def _normalize(self, values: np.ndarray) -> np.ndarray:
@@ -160,7 +314,8 @@ class VTLADataset(Dataset):
 
         with h5py.File(episode_path, 'r') as root:
             joints = root['embodiment/joint']
-            qpos = self._normalize(np.asarray(joints[timestep], dtype=np.float32))
+            qpos = np.asarray(joints[timestep], dtype=np.float32)[self.joint_indices]
+            qpos = self._normalize(qpos)
 
             cam_images = []
             for name in self.camera_names:
@@ -169,11 +324,13 @@ class VTLADataset(Dataset):
 
             tac_images = []
             for name in self.tactile_names:
-                path = TACTILE_PATHS.get(name, f'tactile/{name}/rgb')
+                path = self.tactile_paths_by_episode[episode_path][name]
                 tac_images.append(image_to_tensor(root[path][timestep]))
 
             action_end = min(timestep + 1 + self.chunk_size, len(joints))
-            future_joints = np.asarray(joints[timestep + 1:action_end], dtype=np.float32)
+            future_joints = np.asarray(
+                joints[timestep + 1:action_end], dtype=np.float32
+            )[:, self.joint_indices]
             future_joints = self._normalize(future_joints)
 
         valid_steps = len(future_joints)
@@ -198,19 +355,16 @@ class TactilePretrainDataset(Dataset):
     def __init__(self, dataset_dir: str, tactile_names: Iterable[str], verbose: bool = True):
         self.dataset_dir = Path(dataset_dir)
         self.tactile_names = list(tactile_names)
-        hdf5_dir = self.dataset_dir / 'hdf5'
-        self.episode_files = sorted(hdf5_dir.glob('*.hdf5'))
-        if not self.episode_files:
-            raise ValueError(f"No HDF5 files found in {hdf5_dir}")
+        self.episode_files = discover_episode_files(self.dataset_dir)
 
         self.samples = []
         for episode_path in self.episode_files:
             with h5py.File(episode_path, 'r') as root:
                 for name in self.tactile_names:
-                    rgb_path = TACTILE_PATHS.get(name, f'tactile/{name}/rgb')
-                    _require_datasets(root, [rgb_path], episode_path)
+                    rgb_path = resolve_tactile_path(root, name, episode_path)
                     self.samples.extend(
-                        (episode_path, name, timestep) for timestep in range(len(root[rgb_path]))
+                        (episode_path, name, rgb_path, timestep)
+                        for timestep in range(len(root[rgb_path]))
                     )
 
         if verbose:
@@ -223,8 +377,7 @@ class TactilePretrainDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> Dict[str, object]:
-        episode_path, tactile_name, timestep = self.samples[idx]
-        rgb_path = TACTILE_PATHS.get(tactile_name, f'tactile/{tactile_name}/rgb')
+        episode_path, tactile_name, rgb_path, timestep = self.samples[idx]
         base_path = rgb_path.rsplit('/rgb', 1)[0]
 
         with h5py.File(episode_path, 'r') as root:
@@ -276,6 +429,7 @@ def create_dataloader(args, stage: str = 'stage2') -> DataLoader:
             args.tactile_names,
             args.chunk_size,
             state_dim=args.state_dim,
+            joint_indices=getattr(args, 'joint_indices', None),
         )
 
     return DataLoader(

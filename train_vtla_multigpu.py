@@ -19,7 +19,13 @@ from collections import defaultdict
 
 from models.tactile_encoder import TactileEncoderWithRefine
 from models.vtla_policy import VTLAPolicy
-from dataloader import create_dataloader, VTLADataset, TactilePretrainDataset
+from dataloader import (
+    TactilePretrainDataset,
+    VTLADataset,
+    discover_episode_files,
+    infer_grasp_classify_label,
+    split_episode_files,
+)
 from training_utils import append_epoch_metrics, build_run_config, write_run_config
 
 
@@ -58,6 +64,10 @@ class MultiGPUVTLATrainer:
         self.is_main = (rank == 0)
         self.dataset_stats = None
         self.run_config = None
+        self.best_validation_loss = float('inf')
+        self.autocast_dtype = (
+            torch.bfloat16 if args.amp_dtype == 'bfloat16' else None
+        )
 
         # 只在主进程打印
         if self.is_main:
@@ -157,9 +167,14 @@ class MultiGPUVTLATrainer:
                 targets = {k: v.to(self.device) for k, v in batch['targets'].items()}
 
                 # 前向传播
-                loss, loss_dict = self.model(
-                    tactile_images, targets, weights=self.args.loss_weights
-                )
+                with torch.autocast(
+                    device_type='cuda',
+                    dtype=self.autocast_dtype or torch.bfloat16,
+                    enabled=self.autocast_dtype is not None,
+                ):
+                    loss, loss_dict = self.model(
+                        tactile_images, targets, weights=self.args.loss_weights
+                    )
 
                 # 反向传播
                 self.optimizer.zero_grad()
@@ -188,7 +203,38 @@ class MultiGPUVTLATrainer:
         if self.is_main:
             print("Stage 1 training completed!")
 
-    def train_stage2(self, train_loader, num_epochs):
+    def validate_policy(self, val_loader):
+        """Evaluate a deterministic CVAE latent on the held-out episodes."""
+        if val_loader is None:
+            return None
+
+        self.model.eval()
+        epoch_losses = defaultdict(list)
+        with torch.inference_mode():
+            for batch in val_loader:
+                qpos = batch['qpos'].to(self.device)
+                cam_image = batch['cam_image'].to(self.device)
+                tac_image = batch['tac_image'].to(self.device)
+                actions = batch['actions'].to(self.device)
+                is_pad = batch['is_pad'].to(self.device)
+                with torch.autocast(
+                    device_type='cuda',
+                    dtype=self.autocast_dtype or torch.bfloat16,
+                    enabled=self.autocast_dtype is not None,
+                ):
+                    loss_dict = self.model(
+                        qpos,
+                        cam_image,
+                        tac_image,
+                        actions,
+                        is_pad,
+                        deterministic_latent=True,
+                    )
+                for key, value in loss_dict.items():
+                    epoch_losses[key].append(value.item())
+        return self.reduce_epoch_losses(epoch_losses)
+
+    def train_stage2(self, train_loader, num_epochs, val_loader=None):
         """Stage 2: 端到端VLA训练"""
         if self.is_main:
             print("\n=== Stage 2: End-to-End VLA Training (Multi-GPU) ===")
@@ -215,7 +261,12 @@ class MultiGPUVTLATrainer:
                 is_pad = batch['is_pad'].to(self.device)
 
                 # 前向传播 + 损失计算
-                loss_dict = self.model(qpos, cam_image, tac_image, actions, is_pad)
+                with torch.autocast(
+                    device_type='cuda',
+                    dtype=self.autocast_dtype or torch.bfloat16,
+                    enabled=self.autocast_dtype is not None,
+                ):
+                    loss_dict = self.model(qpos, cam_image, tac_image, actions, is_pad)
 
                 # 反向传播
                 self.optimizer.zero_grad()
@@ -231,20 +282,42 @@ class MultiGPUVTLATrainer:
                     pbar.set_postfix({k: f"{np.mean(v):.4f}" for k, v in epoch_losses.items()})
 
             epoch_losses = self.reduce_epoch_losses(epoch_losses)
+            should_validate = (
+                val_loader is not None
+                and ((epoch + 1) % self.args.val_freq == 0 or epoch + 1 == num_epochs)
+            )
+            validation_losses = self.validate_policy(val_loader) if should_validate else None
             peak_memory = self.reduce_peak_memory()
             if self.is_main:
                 epoch_losses['peak_gpu_memory_gib'] = [peak_memory]
                 print(f"Peak GPU memory: {peak_memory:.2f} GiB")
-                append_epoch_metrics(self.args.run_dir, 'stage2', epoch, epoch_losses)
+                append_epoch_metrics(
+                    self.args.run_dir, 'stage2', epoch, epoch_losses, validation_losses
+                )
                 if (epoch + 1) % self.args.save_freq == 0 or epoch + 1 == num_epochs:
-                    self.save_checkpoint(epoch, epoch_losses, stage='stage2')
+                    self.save_checkpoint(
+                        epoch, epoch_losses, stage='stage2',
+                        validation_losses=validation_losses,
+                    )
+                if validation_losses is not None:
+                    validation_loss = validation_losses['loss'][0]
+                    print(f"Validation loss: {validation_loss:.6f}")
+                    if validation_loss < self.best_validation_loss:
+                        self.best_validation_loss = validation_loss
+                        self.save_checkpoint(
+                            epoch,
+                            epoch_losses,
+                            stage='stage2',
+                            filename='stage2_best.ckpt',
+                            validation_losses=validation_losses,
+                        )
 
             self.scheduler.step()
 
         if self.is_main:
             print("Stage 2 training completed!")
 
-    def train_stage3(self, train_loader, num_epochs):
+    def train_stage3(self, train_loader, num_epochs, val_loader=None):
         """Stage 3: 触觉微调分支训练"""
         if self.is_main:
             print("\n=== Stage 3: Tactile Refine Branch Training (Multi-GPU) ===")
@@ -271,7 +344,12 @@ class MultiGPUVTLATrainer:
                 is_pad = batch['is_pad'].to(self.device)
 
                 # 前向传播
-                loss_dict = self.model(qpos, cam_image, tac_image, actions, is_pad)
+                with torch.autocast(
+                    device_type='cuda',
+                    dtype=self.autocast_dtype or torch.bfloat16,
+                    enabled=self.autocast_dtype is not None,
+                ):
+                    loss_dict = self.model(qpos, cam_image, tac_image, actions, is_pad)
 
                 # 反向传播
                 self.optimizer.zero_grad()
@@ -290,37 +368,72 @@ class MultiGPUVTLATrainer:
                     pbar.set_postfix({k: f"{np.mean(v):.4f}" for k, v in epoch_losses.items()})
 
             epoch_losses = self.reduce_epoch_losses(epoch_losses)
+            should_validate = (
+                val_loader is not None
+                and ((epoch + 1) % self.args.val_freq == 0 or epoch + 1 == num_epochs)
+            )
+            validation_losses = self.validate_policy(val_loader) if should_validate else None
             peak_memory = self.reduce_peak_memory()
             if self.is_main:
                 epoch_losses['peak_gpu_memory_gib'] = [peak_memory]
                 print(f"Peak GPU memory: {peak_memory:.2f} GiB")
-                append_epoch_metrics(self.args.run_dir, 'stage3', epoch, epoch_losses)
+                append_epoch_metrics(
+                    self.args.run_dir, 'stage3', epoch, epoch_losses, validation_losses
+                )
                 if (epoch + 1) % self.args.save_freq == 0 or epoch + 1 == num_epochs:
-                    self.save_checkpoint(epoch, epoch_losses, stage='stage3')
+                    self.save_checkpoint(
+                        epoch, epoch_losses, stage='stage3',
+                        validation_losses=validation_losses,
+                    )
+                if validation_losses is not None:
+                    validation_loss = validation_losses['loss'][0]
+                    print(f"Validation loss: {validation_loss:.6f}")
+                    if validation_loss < self.best_validation_loss:
+                        self.best_validation_loss = validation_loss
+                        self.save_checkpoint(
+                            epoch,
+                            epoch_losses,
+                            stage='stage3',
+                            filename='stage3_best.ckpt',
+                            validation_losses=validation_losses,
+                        )
 
             self.scheduler.step()
 
         if self.is_main:
             print("Stage 3 training completed!")
 
-    def save_checkpoint(self, epoch, losses, stage):
+    def save_checkpoint(
+        self,
+        epoch,
+        losses,
+        stage,
+        filename=None,
+        validation_losses=None,
+    ):
         """保存checkpoint（仅主进程）"""
         if not self.is_main:
             return
 
         ckpt_path = os.path.join(
-            self.args.ckpt_dir,
-            f"{stage}_epoch_{epoch+1}.ckpt"
+            self.args.ckpt_dir, filename or f"{stage}_epoch_{epoch+1}.ckpt"
         )
-        torch.save({
+        checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.module.state_dict(),  # 注意：DDP需要用module
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'losses': {k: np.mean(v) for k, v in losses.items()},
+            'validation_losses': (
+                {k: np.mean(v) for k, v in validation_losses.items()}
+                if validation_losses is not None else None
+            ),
             'dataset_stats': self.dataset_stats,
             'run_config': self.run_config,
-        }, ckpt_path)
+        }
+        temporary_path = f"{ckpt_path}.tmp"
+        torch.save(checkpoint, temporary_path)
+        os.replace(temporary_path, ckpt_path)
         print(f"Checkpoint saved: {ckpt_path}")
 
     def reduce_epoch_losses(self, losses):
@@ -389,16 +502,46 @@ def main_worker(rank, world_size, args):
                 args.dataset_dir, args.tactile_names, verbose=(rank == 0)
             )
             dataset_stats = None
+            val_dataset = None
+            all_episode_files = dataset.episode_files
+            train_episode_files = dataset.episode_files
+            val_episode_files = []
         else:
+            all_episode_files = discover_episode_files(args.dataset_dir)
+            episode_labels = {
+                path: infer_grasp_classify_label(path) for path in all_episode_files
+            }
+            train_episode_files, val_episode_files = split_episode_files(
+                all_episode_files,
+                args.val_fraction,
+                args.val_seed,
+                strata=episode_labels,
+            )
             dataset = VTLADataset(
                 args.dataset_dir,
                 args.camera_names,
                 args.tactile_names,
                 args.chunk_size,
                 state_dim=args.state_dim,
+                joint_indices=args.joint_indices,
+                episode_files=train_episode_files,
                 verbose=(rank == 0),
             )
             dataset_stats = dataset.get_stats()
+            val_dataset = (
+                VTLADataset(
+                    args.dataset_dir,
+                    args.camera_names,
+                    args.tactile_names,
+                    args.chunk_size,
+                    state_dim=args.state_dim,
+                    joint_indices=args.joint_indices,
+                    episode_files=val_episode_files,
+                    normalization_stats=dataset_stats,
+                    verbose=(rank == 0),
+                )
+                if val_episode_files else None
+            )
 
         sampler = DistributedSampler(
             dataset,
@@ -416,11 +559,33 @@ def main_worker(rank, world_size, args):
             pin_memory=True,
             persistent_workers=args.num_workers > 0,
         )
+        if val_dataset is not None:
+            val_sampler = DistributedSampler(
+                val_dataset,
+                num_replicas=world_size,
+                rank=rank,
+                shuffle=False,
+            )
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=args.batch_size,
+                sampler=val_sampler,
+                num_workers=args.num_workers,
+                pin_memory=True,
+                persistent_workers=args.num_workers > 0,
+            )
+        else:
+            val_loader = None
         trainer.dataset_stats = dataset_stats
 
         if rank == 0:
             print(f"Dataset loaded: {len(train_loader)} batches per GPU")
             print(f"Total samples: {len(dataset)}, Samples per GPU: {sampler.num_samples}")
+            if val_dataset is not None:
+                print(
+                    f"Validation: {len(val_episode_files)} episodes, "
+                    f"{len(val_dataset)} samples, {len(val_loader)} batches per GPU"
+                )
             trainer.run_config = build_run_config(
                 args,
                 world_size=world_size,
@@ -434,15 +599,40 @@ def main_worker(rank, world_size, args):
                     p.numel() for p in trainer.model.parameters() if p.requires_grad
                 ),
             }
+            dataset_root = os.path.abspath(args.dataset_dir)
+            trainer.run_config['dataset'] = {
+                'root': dataset_root,
+                'episode_count': len(all_episode_files),
+                'train_episode_count': len(train_episode_files),
+                'validation_episode_count': len(val_episode_files),
+                'train_episodes': [path.name for path in train_episode_files],
+                'validation_episodes': [path.name for path in val_episode_files],
+                'train_sample_count': len(dataset),
+                'validation_sample_count': len(val_dataset) if val_dataset is not None else 0,
+                'split_seed': args.val_seed,
+                'validation_fraction': args.val_fraction,
+                'class_counts': {
+                    label: sum(value == label for value in episode_labels.values())
+                    for label in sorted(set(episode_labels.values()))
+                },
+                'train_class_counts': {
+                    label: sum(episode_labels[path] == label for path in train_episode_files)
+                    for label in sorted(set(episode_labels.values()))
+                },
+                'validation_class_counts': {
+                    label: sum(episode_labels[path] == label for path in val_episode_files)
+                    for label in sorted(set(episode_labels.values()))
+                },
+            }
             config_path = write_run_config(args.run_dir, trainer.run_config)
             print(f"Run configuration saved: {config_path}")
 
         if args.stage == 'stage1':
             trainer.train_stage1(train_loader, args.num_epochs)
         elif args.stage == 'stage2':
-            trainer.train_stage2(train_loader, args.num_epochs)
+            trainer.train_stage2(train_loader, args.num_epochs, val_loader)
         elif args.stage == 'stage3':
-            trainer.train_stage3(train_loader, args.num_epochs)
+            trainer.train_stage3(train_loader, args.num_epochs, val_loader)
     finally:
         cleanup_ddp()
 
@@ -465,14 +655,26 @@ def get_args():
 
     # 数据相关
     parser.add_argument('--dataset_dir', type=str, required=True)
+    parser.add_argument('--dataset_manifest', type=str, default=None,
+                       help='Path to the validated source-data manifest recorded in config.json')
     parser.add_argument('--camera_names', nargs='+', default=['cam_high'])
     parser.add_argument('--tactile_names', nargs='+', default=['tac_left', 'tac_right'])
     parser.add_argument('--batch_size', type=int, default=8,
                        help='Batch size per GPU')
     parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--amp_dtype', choices=['float32', 'bfloat16'], default='float32',
+                       help='CUDA autocast precision; bfloat16 is recommended on L40S')
+    parser.add_argument('--val_fraction', type=float, default=0.1,
+                       help='Episode fraction held out for validation')
+    parser.add_argument('--val_seed', type=int, default=20260809,
+                       help='Deterministic episode split seed')
+    parser.add_argument('--val_freq', type=int, default=5,
+                       help='Run validation every N epochs')
 
     # 模型相关
-    parser.add_argument('--state_dim', type=int, default=14)
+    parser.add_argument('--state_dim', type=int, default=8)
+    parser.add_argument('--joint_indices', nargs='+', type=int, default=None,
+                       help='Raw UniVTAC joint columns used by the model; defaults to range(state_dim)')
     parser.add_argument('--chunk_size', type=int, default=100)
     parser.add_argument('--hidden_dim', type=int, default=512)
     parser.add_argument('--nheads', type=int, default=8)

@@ -299,7 +299,9 @@ def get_args():
     parser.add_argument('--num_workers', type=int, default=4)
 
     # 模型相关
-    parser.add_argument('--state_dim', type=int, default=14)
+    parser.add_argument('--state_dim', type=int, default=8)
+    parser.add_argument('--joint_indices', nargs='+', type=int, default=None,
+                       help='Raw UniVTAC joint columns used by the model; defaults to range(state_dim)')
     parser.add_argument('--chunk_size', type=int, default=100)
     parser.add_argument('--hidden_dim', type=int, default=512)
     parser.add_argument('--nheads', type=int, default=8)
