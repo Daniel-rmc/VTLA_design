@@ -68,15 +68,22 @@ cd /home/rmc/workspace/VTLA_design
 
 ## 训练
 
-### UniVTAC 论文对齐的四任务训练
+### UniVTAC 论文对齐的八任务训练
 
-`grasp_classify`、`insert_HDMI`、`insert_hole`、`insert_tube` 使用官方 episode 0–49、官方 seed-1 80/20 切分、单任务全局 batch 64 和精确 4000 optimizer steps：
+全部八个官方任务使用各自的 episode 0–49、官方 seed-1 80/20 切分、单任务全局 batch 64 和精确 4000 optimizer steps。首轮四任务启动命令为：
 
 ```bash
 scripts/training/start_official_tasks.sh
 ```
 
-任务在物理 GPU 1/2/3 上并行调度；每次运行独立保存完整命令、配置、数据指纹、训练指标、曝光量和 checkpoint。参数依据、逐任务样本核算以及与论文实现的差异见 [UniVTAC 论文对齐训练协议](docs/UNIVTAC_PAPER_ALIGNED_TRAINING.md)。
+剩余四任务可续接到同一个 run group：
+
+```bash
+scripts/training/continue_official_tasks.sh \
+  runs/stage2/official_<timestamp>_<git>_gpu123
+```
+
+任务在物理 GPU 1/2/3 上做任务级并行；每次运行独立保存完整命令、配置、数据指纹、训练指标、曝光量和 checkpoint。参数依据、逐任务样本核算以及与论文实现的差异见 [UniVTAC 论文对齐训练协议](docs/UNIVTAC_PAPER_ALIGNED_TRAINING.md)。
 
 ### 既有通用训练入口
 

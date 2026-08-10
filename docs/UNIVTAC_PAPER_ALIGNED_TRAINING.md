@@ -19,10 +19,14 @@
 | `insert_HDMI` | head | 5,850 | 4,680 / 1,170 | 252,976 | 54.05× |
 | `insert_hole` | head | 8,528 | 6,877 / 1,651 | 254,705 | 37.04× |
 | `insert_tube` | head + wrist | 9,377 | 7,515 / 1,862 | 254,779 | 33.90× |
+| `lift_bottle` | head + wrist | 15,284 | 12,234 / 3,050 | 254,920 | 20.84× |
+| `lift_can` | head | 9,122 | 7,392 / 1,730 | 254,912 | 34.48× |
+| `pull_out_key` | head | 10,114 | 8,092 / 2,022 | 254,884 | 31.50× |
+| `put_bottle_in_shelf` | head | 14,615 | 11,627 / 2,988 | 255,559 | 21.98× |
 
 名义曝光量均为 `4000 × 64 = 256,000`。表中实际值略小，是因为官方 DataLoader 不设置 `drop_last=True`，每轮最后一个 batch 会短于 64；VTLA 保留了这一行为。不同任务轨迹长度不同，因此等效遍历次数不同，这是官方逐任务训练协议本身的结果。对同一任务比较不同模型时，episode、split、batch 顺序规则和优化步数保持一致。
 
-发布数据的 `clean/metadata.json` 中，前 50 条里 `insert_HDMI` 有 3 条、`insert_tube` 有 2 条记录为 `fail`。官方 `process_data.py` 不读取或过滤 metadata，而是直接取前 50 个 HDF5；为了复现实验输入，本协议同样保留这些轨迹，并在 manifest 中记录结果计数。
+发布数据的 `clean/metadata.json` 中，前 50 条里 `insert_HDMI` 有 3 条、`insert_tube` 有 2 条、`lift_bottle`/`pull_out_key`/`put_bottle_in_shelf` 各有 1 条记录为 `fail`；`lift_can` 有 18 条未填写 result。官方 `process_data.py` 不读取或过滤 metadata，而是直接取前 50 个 HDF5；为了复现实验输入，本协议同样保留这些轨迹，并在 manifest 中记录结果计数。
 
 ## VTLA 对齐设置
 
