@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from summarize_univtac_eval import parse_log, summarize
+from scripts.evaluation.summarize_univtac_eval import parse_log, summarize
 
 
 def test_parse_and_merge_sharded_univtac_logs(tmp_path: Path):

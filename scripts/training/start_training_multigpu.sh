@@ -111,7 +111,7 @@ fi
 
 mkdir -p "${CKPT_DIR}"
 
-TRAIN_CMD="set -o pipefail; cd ${PROJECT_DIR}; env PYTHONUNBUFFERED=1 NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE} CUDA_VISIBLE_DEVICES=${GPU_IDS_CSV} PYTHONPATH=${PROJECT_DIR}:${PROJECT_DIR}/../UniVTAC:${PROJECT_DIR}/../UniVTAC/policy/ACT ${PYTHON_BIN} train_vtla_multigpu.py --stage ${STAGE} --num_gpus ${NUM_GPUS} --dataset_dir ${DATASET_DIR} --dataset_manifest ${DATASET_MANIFEST} --tactile_names tac_left tac_right --state_dim 8 --batch_size ${BATCH_SIZE} --num_epochs ${NUM_EPOCHS} --ckpt_dir ${CKPT_DIR} --run_dir ${RUN_DIR} --num_workers ${NUM_WORKERS} --save_freq ${SAVE_FREQ} ${EXTRA_ARGS} 2>&1 | tee ${LOG_FILE}; code=\${PIPESTATUS[0]}; echo \${code} > ${EXIT_FILE}; exit \${code}"
+TRAIN_CMD="set -o pipefail; cd ${PROJECT_DIR}; env PYTHONUNBUFFERED=1 NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE} CUDA_VISIBLE_DEVICES=${GPU_IDS_CSV} PYTHONPATH=${PROJECT_DIR}:${PROJECT_DIR}/../UniVTAC:${PROJECT_DIR}/../UniVTAC/policy/ACT ${PYTHON_BIN} -m scripts.training.train_vtla_multigpu --stage ${STAGE} --num_gpus ${NUM_GPUS} --dataset_dir ${DATASET_DIR} --dataset_manifest ${DATASET_MANIFEST} --tactile_names tac_left tac_right --state_dim 8 --batch_size ${BATCH_SIZE} --num_epochs ${NUM_EPOCHS} --ckpt_dir ${CKPT_DIR} --run_dir ${RUN_DIR} --num_workers ${NUM_WORKERS} --save_freq ${SAVE_FREQ} ${EXTRA_ARGS} 2>&1 | tee ${LOG_FILE}; code=\${PIPESTATUS[0]}; echo \${code} > ${EXIT_FILE}; exit \${code}"
 
 printf '%s\n' "${TRAIN_CMD}" > "${RUN_DIR}/launch_command.sh"
 chmod +x "${RUN_DIR}/launch_command.sh"

@@ -78,7 +78,7 @@
 ### 训练命令
 
 ```bash
-python train_vtla.py \
+python -m scripts.training.train_vtla \
     --stage stage1 \
     --dataset_dir /path/to/tactile_data \
     --tactile_names tac_left tac_right \
@@ -169,7 +169,7 @@ L_kl = KL(q(z|τ) || p(z))
 ### 训练命令
 
 ```bash
-python train_vtla.py \
+python -m scripts.training.train_vtla \
     --stage stage2 \
     --dataset_dir /path/to/robot_data \
     --camera_names cam_high cam_left cam_right \
@@ -327,7 +327,7 @@ L_contact = BCE(contact_pred, contact_gt)
 ### 训练命令
 
 ```bash
-python train_vtla.py \
+python -m scripts.training.train_vtla \
     --stage stage3 \
     --dataset_dir /path/to/contact_rich_data \
     --camera_names cam_high cam_left cam_right \
@@ -506,7 +506,7 @@ w_contact = 0.1  # 辅助任务
 for kl in 5.0 10.0 20.0; do
   for lr in 5e-5 1e-4 2e-4; do
     for scale in 0.05 0.1 0.15; do
-      python train_vtla.py \
+      python -m scripts.training.train_vtla \
         --kl_weight $kl \
         --lr $lr \
         --refine_scale $scale \

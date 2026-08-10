@@ -54,7 +54,7 @@ EXIT_FILE="${RUN_DIR}/exit_code"
 SESSION_NAME="vtla_${STAGE}_${RUN_NAME}"
 mkdir -p "${CKPT_DIR}"
 
-TRAIN_CMD="set -o pipefail; cd ${PROJECT_DIR}; env PYTHONUNBUFFERED=1 CUDA_VISIBLE_DEVICES=${GPU_ID} PYTHONPATH=${PROJECT_DIR}:${PROJECT_DIR}/../UniVTAC:${PROJECT_DIR}/../UniVTAC/policy/ACT ${PYTHON_BIN} train_vtla.py --stage ${STAGE} --dataset_dir ${DATASET_DIR} --tactile_names tac_left tac_right --state_dim 8 --batch_size ${BATCH_SIZE} --num_epochs ${NUM_EPOCHS} --ckpt_dir ${CKPT_DIR} --run_dir ${RUN_DIR} --device cuda:0 --num_workers ${NUM_WORKERS:-8} --save_freq ${SAVE_FREQ:-10} ${EXTRA_ARGS} 2>&1 | tee ${LOG_FILE}; code=\${PIPESTATUS[0]}; echo \${code} > ${EXIT_FILE}; exit \${code}"
+TRAIN_CMD="set -o pipefail; cd ${PROJECT_DIR}; env PYTHONUNBUFFERED=1 CUDA_VISIBLE_DEVICES=${GPU_ID} PYTHONPATH=${PROJECT_DIR}:${PROJECT_DIR}/../UniVTAC:${PROJECT_DIR}/../UniVTAC/policy/ACT ${PYTHON_BIN} -m scripts.training.train_vtla --stage ${STAGE} --dataset_dir ${DATASET_DIR} --tactile_names tac_left tac_right --state_dim 8 --batch_size ${BATCH_SIZE} --num_epochs ${NUM_EPOCHS} --ckpt_dir ${CKPT_DIR} --run_dir ${RUN_DIR} --device cuda:0 --num_workers ${NUM_WORKERS:-8} --save_freq ${SAVE_FREQ:-10} ${EXTRA_ARGS} 2>&1 | tee ${LOG_FILE}; code=\${PIPESTATUS[0]}; echo \${code} > ${EXIT_FILE}; exit \${code}"
 printf '%s\n' "${TRAIN_CMD}" > "${RUN_DIR}/launch_command.sh"
 chmod +x "${RUN_DIR}/launch_command.sh"
 tmux new-session -d -s "${SESSION_NAME}" "bash -lc '${TRAIN_CMD}'"

@@ -18,7 +18,7 @@ The old four-GPU run failed during DDP initialization because GPU 0 was already 
 Use the following command for the current live state:
 
 ```bash
-./check_training.sh
+scripts/training/check_training.sh
 ```
 
 Runs are self-contained under `runs/<stage>/<run-name>/`:
@@ -33,5 +33,5 @@ Runs are self-contained under `runs/<stage>/<run-name>/`:
 The official-data Stage 2 launcher defaults to physical GPUs selected by free memory, batch size 64/GPU, BF16, both available cameras, both tactile sensors, native 8D control, a stratified 90/10 episode split, and 150 epochs. To force the last three GPUs explicitly:
 
 ```bash
-./start_training_multigpu.sh stage2 3 1,2,3
+scripts/training/start_training_multigpu.sh stage2 3 1,2,3
 ```

@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-DEFAULT_RUN = Path("/home/rmc/workspace/VTLA_design/runs/stage2/20260809_155942_1073ae9_gpu123")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_RUN = PROJECT_ROOT / "runs" / "stage2" / "20260809_155942_1073ae9_gpu123"
 
 
 def parse_args():
@@ -29,7 +30,7 @@ def parse_args():
     parser.add_argument(
         "--deploy-config",
         type=Path,
-        default=Path(__file__).parent / "univtac_adapter" / "deploy.yml",
+        default=PROJECT_ROOT / "univtac_adapter" / "deploy.yml",
     )
     parser.add_argument("--task", default="grasp_classify")
     parser.add_argument("--task-config", default="demo")
@@ -101,7 +102,7 @@ def main():
     environment["PATH"] = os.pathsep.join(
         (str(args.python.parent.resolve()), environment.get("PATH", ""))
     )
-    adapter_root = str((Path(__file__).parent / "univtac_adapter").resolve())
+    adapter_root = str((PROJECT_ROOT / "univtac_adapter").resolve())
     python_paths = [adapter_root, str(args.univtac_root.resolve())]
     if environment.get("PYTHONPATH"):
         python_paths.append(environment["PYTHONPATH"])

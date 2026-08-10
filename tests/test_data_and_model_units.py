@@ -13,9 +13,9 @@ from dataloader import (
     infer_grasp_classify_label,
     split_episode_files,
 )
-from eval_vtla_offline import select_episode_files
 from models.action_heads import DualPathActionHead
 from models.vtla_policy import get_2d_sinusoid_encoding
+from scripts.evaluation.eval_vtla_offline import select_episode_files
 
 
 def _write_dataset(root: Path) -> None:

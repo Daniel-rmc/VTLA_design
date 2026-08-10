@@ -4,8 +4,17 @@
 set -u
 PROJECT_DIR="/home/rmc/workspace/VTLA_design"
 
-echo "=== Active VTLA tmux sessions ==="
-tmux ls 2>/dev/null | awk '/vtla_/ {print}' || true
+echo "=== VTLA tmux sessions ==="
+tmux list-panes -a -F '#{session_name}|#{pane_dead}|#{pane_dead_status}|#{pane_current_command}' 2>/dev/null |
+    awk -F'|' '
+        $1 ~ /^vtla_/ {
+            exit_code = ($3 == "") ? "unknown" : $3
+            state = ($2 == "1") ? "finished(exit=" exit_code ")" : "running"
+            printf "%s: %s, command=%s\n", $1, state, $4
+            found = 1
+        }
+        END {if (!found) print "No VTLA tmux sessions."}
+    ' || echo "No VTLA tmux sessions."
 
 echo ""
 echo "=== Most recent runs ==="
