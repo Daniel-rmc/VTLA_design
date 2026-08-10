@@ -23,12 +23,13 @@ Review date: 2026-08-09
 
 ## Validation evidence
 
-- Eleven tests cover timestep sampling, both UniVTAC tactile-key layouts, raw-9D to native-8D projection, deterministic stratified episode splitting, Stage 1 marker shapes, deployment tensor ownership, 2-D positions, evaluation aggregation, and refinement scaling.
+- Twelve tests cover timestep sampling, both UniVTAC tactile-key layouts, raw-9D to native-8D projection, deterministic stratified episode splitting and evaluation split reuse, Stage 1 marker shapes, deployment tensor ownership, 2-D positions, evaluation aggregation, and refinement scaling.
 - A complete one-epoch DDP smoke run succeeded on physical GPUs `1,2,3` with two cameras, two tactile sensors, batch size 32/GPU, and effective batch size 96.
 - The smoke run used 9.14 GiB peak allocated memory per L40S.
 - One-epoch Stage 1 and Stage 3 regression runs also completed, including checkpoint transfer and the frozen-backbone path.
 - A new official-data smoke run succeeded with 100 published episodes (90 train/10 validation), native 8D control, batch size 64/GPU, effective batch 192, and BF16. It used 12.46 GiB peak memory per L40S and completed both validation and strict checkpoint deployment.
 - NCCL 2.21.5 P2P collectives currently hang on this host. A minimal three-GPU health check identified the failing path; `NCCL_P2P_DISABLE=1` completes correctly and is now recorded by the launcher.
+- The full 150-epoch official-data run completed with exit code 0. Its selected epoch-130 checkpoint achieved 80/100 success in UniVTAC on fixed seeds `1000000..1000099`, with no missing or duplicate completed seeds.
 
 ## Remaining design limitations
 

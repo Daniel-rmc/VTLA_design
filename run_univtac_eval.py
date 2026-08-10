@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-DEFAULT_RUN = Path("/home/rmc/workspace/VTLA_design/runs/stage2/20260809_014410_d04cb96_gpu123")
+DEFAULT_RUN = Path("/home/rmc/workspace/VTLA_design/runs/stage2/20260809_155942_1073ae9_gpu123")
 
 
 def parse_args():

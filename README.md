@@ -28,6 +28,8 @@
 
 ```bash
 /home/rmc/miniconda/envs/UniVTAC/bin/python run_univtac_eval.py \
+    --run-dir runs/stage2/20260809_155942_1073ae9_gpu123 \
+    --deploy-config univtac_adapter/deploy_official8d_epoch130.yml \
     --gpu 3 --total-num 100
 ```
 
@@ -46,9 +48,10 @@
 
 ```bash
 CUDA_VISIBLE_DEVICES=3 /home/rmc/miniconda/envs/UniVTAC/bin/python eval_vtla_offline.py \
-    --checkpoint runs/stage2/20260809_014410_d04cb96_gpu123/checkpoints/stage2_epoch_500.ckpt \
+    --checkpoint runs/stage2/20260809_155942_1073ae9_gpu123/checkpoints/stage2_epoch_130.ckpt \
     --dataset-dir /home/rmc/workspace/UniVTAC/data/official/grasp_classify/clean \
-    --output runs/stage2/20260809_014410_d04cb96_gpu123/eval/offline_result.json
+    --split validation \
+    --output runs/stage2/20260809_155942_1073ae9_gpu123/eval/offline_validation_epoch130.json
 ```
 
 ## 🎯 核心创新

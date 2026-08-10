@@ -13,6 +13,7 @@ from dataloader import (
     infer_grasp_classify_label,
     split_episode_files,
 )
+from eval_vtla_offline import select_episode_files
 from models.action_heads import DualPathActionHead
 from models.vtla_policy import get_2d_sinusoid_encoding
 
@@ -120,6 +121,18 @@ class DatasetTests(unittest.TestCase):
             self.assertEqual(len(train_a), 8)
             self.assertEqual(len(val_a), 2)
             self.assertFalse(set(train_a) & set(val_a))
+
+    def test_offline_eval_reuses_checkpoint_validation_episode_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for episode_id in range(3):
+                _write_official_episode(root, episode_id)
+            selected = select_episode_files(
+                root,
+                'validation',
+                {'dataset': {'validation_episodes': ['2.hdf5', '0.hdf5']}},
+            )
+            self.assertEqual([path.name for path in selected], ['2.hdf5', '0.hdf5'])
 
 
 class ModelUnitTests(unittest.TestCase):

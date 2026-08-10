@@ -6,19 +6,20 @@ import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Dict
 import sys
-import os
+from pathlib import Path
 
 # 导入自定义模块
 from .tactile_encoder import TactileEncoder
 from .cross_modal_fusion import BiDirectionalCrossAttention
 from .action_heads import DualPathActionHead
 
-# 添加UniVTAC路径
-univtac_base = os.path.join(os.path.dirname(__file__), '../../../UniVTAC')
-univtac_detr = os.path.join(univtac_base, 'policy/ACT/detr')
-if os.path.exists(univtac_base):
-    sys.path.insert(0, univtac_base)
-    sys.path.insert(0, univtac_detr)
+# 添加同一 workspace 下的 UniVTAC 路径。环境变量仍可覆盖模块搜索，
+# 但独立评测脚本不应依赖训练启动器注入 PYTHONPATH。
+univtac_base = Path(__file__).resolve().parents[2] / 'UniVTAC'
+univtac_detr = univtac_base / 'policy' / 'ACT' / 'detr'
+if univtac_base.is_dir():
+    sys.path.insert(0, str(univtac_base))
+    sys.path.insert(0, str(univtac_detr))
 
 try:
     from policy.ACT.detr.models.backbone import build_backbone

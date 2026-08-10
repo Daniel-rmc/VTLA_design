@@ -1,4 +1,4 @@
-# Exact UniVTAC deployment configuration for the official-data native-8D run.
+# Frozen UniVTAC evaluation configuration for the official-data native-8D run.
 policy_name: VTLA
 seed: 0
 instruction_type: seen

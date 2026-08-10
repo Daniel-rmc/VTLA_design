@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import torch
 from torch.utils.data import DataLoader
 
-from dataloader import VTLADataset
+from dataloader import VTLADataset, discover_episode_files
 from models.vtla_policy import VTLAPolicy
 
 
@@ -24,14 +24,50 @@ def parse_args():
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--split",
+        choices=("all", "train", "validation"),
+        default="all",
+        help=(
+            "Episode split to evaluate. train/validation reuse the exact episode "
+            "names stored in the checkpoint run configuration."
+        ),
+    )
     return parser.parse_args()
+
+
+def select_episode_files(dataset_dir: Path, split: str, run_config: dict) -> list[Path]:
+    """Resolve an evaluation split without silently mixing train and validation data."""
+    discovered = discover_episode_files(dataset_dir)
+    if split == "all":
+        return discovered
+
+    dataset_config = run_config.get("dataset", {})
+    episode_names = dataset_config.get(f"{split}_episodes")
+    if not episode_names:
+        raise ValueError(
+            f"Checkpoint does not record a non-empty {split}_episodes split; "
+            "use --split all only if evaluating every trajectory is intentional"
+        )
+
+    by_name = {path.name: path for path in discovered}
+    if len(by_name) != len(discovered):
+        raise ValueError(f"Episode filenames are not unique under {dataset_dir}")
+    missing = [name for name in episode_names if name not in by_name]
+    if missing:
+        raise ValueError(
+            f"{len(missing)} checkpoint {split} episodes are missing under "
+            f"{dataset_dir}: {missing[:5]}"
+        )
+    return [by_name[name] for name in episode_names]
 
 
 def main():
     args = parse_args()
     device = torch.device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    training = dict(checkpoint["run_config"]["training"])
+    run_config = checkpoint["run_config"]
+    training = dict(run_config["training"])
     training["pretrained_backbones"] = False
     model = VTLAPolicy(SimpleNamespace(**training), stage=training["stage"])
     state_dict = checkpoint["model_state_dict"]
@@ -41,6 +77,7 @@ def main():
     model.to(device).eval()
 
     stats = checkpoint["dataset_stats"]
+    episode_files = select_episode_files(args.dataset_dir, args.split, run_config)
     dataset = VTLADataset(
         str(args.dataset_dir),
         training["camera_names"],
@@ -48,6 +85,7 @@ def main():
         chunk_size=training["chunk_size"],
         state_dim=training["state_dim"],
         joint_indices=stats.get("joint_indices"),
+        episode_files=episode_files,
         normalization_stats=stats,
         verbose=True,
     )
@@ -104,6 +142,9 @@ def main():
         "checkpoint": str(args.checkpoint.resolve()),
         "checkpoint_epoch_zero_based": checkpoint.get("epoch"),
         "dataset_dir": str(args.dataset_dir.resolve()),
+        "split": args.split,
+        "episode_count": len(episode_files),
+        "episodes": [path.name for path in episode_files],
         "samples": len(dataset),
         "valid_action_steps": all_joint_count,
         "normalized_mae": normalized_abs_sum / valid_scalar_count,
