@@ -1,0 +1,10 @@
+policy_name: VTLA
+seed: 0
+instruction_type: seen
+instuction_file: null
+project_dir: /home/rmc/workspace/VTLA_design
+checkpoint: /home/rmc/workspace/VTLA_design/runs/stage2/official_20260810_141830_f27987c_gpu123/insert_HDMI/checkpoints/stage2_last.ckpt
+stage: stage2
+device: cuda:0
+action_step: 0
+normalized_action_clip: 5.0
