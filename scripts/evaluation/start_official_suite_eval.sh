@@ -12,7 +12,7 @@ GPU_ID="${GPU_ID:-0}"
 MIN_FREE_MEMORY_MB="${MIN_FREE_MEMORY_MB:-12000}"
 CONFIG_DIR="${PROJECT_DIR}/univtac_adapter/official4000"
 SUITE_DIR="${GROUP_DIR}/eval/univtac_suite"
-TASKS=(grasp_classify insert_HDMI insert_hole insert_tube lift_bottle lift_can pull_out_key put_bottle_in_shelf)
+TASKS=(insert_HDMI insert_hole insert_tube lift_bottle lift_can pull_out_key put_bottle_in_shelf)
 
 cd "${PROJECT_DIR}"
 
@@ -33,23 +33,55 @@ run_eval() {
         --max-seed "${max_seed}"
 }
 
-if [[ "${1:-}" == "--worker" ]]; then
-    mkdir -p "${SUITE_DIR}"
-    echo "[$(date --iso-8601=seconds)] Smoke test: grasp_classify seed 9000000"
-    run_eval grasp_classify 1 9000000 9000000
-    printf '0\n' > "${SUITE_DIR}/smoke_exit_code"
+summarize_task() {
+    local task="$1"
+    local aggregate="${GROUP_DIR}/${task}/eval/univtac/aggregate_result.json"
+    local result_root="${UNIVTAC_DIR}/eval_result/VTLA/${task}/${task}"
+    "${PYTHON_BIN}" -m scripts.evaluation.summarize_univtac_eval \
+        --result-root "${result_root}" \
+        --start-seed 1000000 \
+        --end-seed 1000099 \
+        --output "${aggregate}"
+}
 
-    for task in "${TASKS[@]}"; do
+missing_seeds() {
+    local aggregate="$1"
+    "${PYTHON_BIN}" - "${aggregate}" <<'PY'
+import json, sys
+result = json.load(open(sys.argv[1], encoding="utf-8"))
+print(" ".join(str(seed) for seed in result["missing_seeds"]))
+PY
+}
+
+ensure_task_complete() {
+    local task="$1"
+    local aggregate="${GROUP_DIR}/${task}/eval/univtac/aggregate_result.json"
+    local result_root="${UNIVTAC_DIR}/eval_result/VTLA/${task}/${task}"
+    local attempt seed missing
+
+    if [[ ! -d "${result_root}" ]] || ! find "${result_root}" -mindepth 2 -maxdepth 2 -name log.log -print -quit | grep -q .; then
         echo "[$(date --iso-8601=seconds)] Full evaluation: ${task}, seeds 1000000-1000099"
-        run_eval "${task}" 100 1000000 1000099
-        aggregate="${GROUP_DIR}/${task}/eval/univtac/aggregate_result.json"
-        result_root="${UNIVTAC_DIR}/eval_result/VTLA/${task}/${task}"
-        "${PYTHON_BIN}" -m scripts.evaluation.summarize_univtac_eval \
-            --result-root "${result_root}" \
-            --start-seed 1000000 \
-            --end-seed 1000099 \
-            --output "${aggregate}"
-        "${PYTHON_BIN}" - "${aggregate}" <<'PY'
+        if ! run_eval "${task}" 100 1000000 1000099; then
+            echo "[$(date --iso-8601=seconds)] ${task} evaluator returned non-zero; checking persisted seeds"
+        fi
+    fi
+
+    for attempt in 1 2 3; do
+        summarize_task "${task}"
+        missing=$(missing_seeds "${aggregate}")
+        if [[ -z "${missing}" ]]; then
+            break
+        fi
+        echo "[$(date --iso-8601=seconds)] ${task} repair attempt ${attempt}; missing seeds: ${missing}"
+        for seed in ${missing}; do
+            if ! run_eval "${task}" 1 "${seed}" "${seed}"; then
+                echo "[$(date --iso-8601=seconds)] ${task} seed ${seed} returned non-zero; persisted outcome will be checked"
+            fi
+        done
+    done
+
+    summarize_task "${task}"
+    "${PYTHON_BIN}" - "${aggregate}" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1], encoding="utf-8"))
 if not result["complete"] or result["unresolved_error_events"]:
@@ -58,10 +90,25 @@ if not result["complete"] or result["unresolved_error_events"]:
         f"missing={result['missing_seeds']}, errors={result['unresolved_error_events']}"
     )
 PY
+}
+
+if [[ "${1:-}" == "--worker" ]]; then
+    mkdir -p "${SUITE_DIR}"
+    if [[ ! -f "${SUITE_DIR}/smoke_exit_code" || "$(<"${SUITE_DIR}/smoke_exit_code")" != 0 ]]; then
+        echo "[$(date --iso-8601=seconds)] Smoke test: grasp_classify seed 9000000"
+        run_eval grasp_classify 1 9000000 9000000
+        printf '0\n' > "${SUITE_DIR}/smoke_exit_code"
+    else
+        echo "[$(date --iso-8601=seconds)] Reusing successful smoke test"
+    fi
+
+    for task in "${TASKS[@]}"; do
+        ensure_task_complete "${task}"
     done
 
     "${PYTHON_BIN}" -m scripts.evaluation.summarize_univtac_suite \
         --group-dir "${GROUP_DIR}" \
+        --tasks "${TASKS[@]}" \
         --output "${SUITE_DIR}/aggregate_result.json"
     printf '0\n' > "${SUITE_DIR}/exit_code"
     echo "[$(date --iso-8601=seconds)] All eight UniVTAC evaluations completed"
@@ -105,7 +152,8 @@ cat > "${SUITE_DIR}/plan.json" <<EOF
 {
   "created_at": "$(date --iso-8601=seconds)",
   "gpu": ${GPU_ID},
-  "tasks": ["grasp_classify", "insert_HDMI", "insert_hole", "insert_tube", "lift_bottle", "lift_can", "pull_out_key", "put_bottle_in_shelf"],
+  "tasks": ["insert_HDMI", "insert_hole", "insert_tube", "lift_bottle", "lift_can", "pull_out_key", "put_bottle_in_shelf"],
+  "excluded_tasks": {"grasp_classify": "already evaluated separately at user request"},
   "checkpoint": "per-task stage2_last.ckpt at step 4000",
   "smoke_seed": 9000000,
   "official_seed_start": 1000000,
@@ -116,11 +164,11 @@ cat > "${SUITE_DIR}/plan.json" <<EOF
 EOF
 
 tmux new-session -d -s vtla_official4000_eval_gpu0 \
-    "bash -lc '${SCRIPT_PATH} --worker 2>&1 | tee \"${SUITE_DIR}/suite.log\"; code=\${PIPESTATUS[0]}; printf \"%s\\n\" \"\${code}\" > \"${SUITE_DIR}/worker_exit_code\"; exit \"\${code}\"'"
+    "bash -lc '${SCRIPT_PATH} --worker 2>&1 | tee -a \"${SUITE_DIR}/suite.log\"; code=\${PIPESTATUS[0]}; printf \"%s\\n\" \"\${code}\" > \"${SUITE_DIR}/worker_exit_code\"; exit \"\${code}\"'"
 
-echo "Started UniVTAC eight-task evaluation"
+echo "Started UniVTAC remaining-task evaluation"
 echo "  tmux: vtla_official4000_eval_gpu0"
 echo "  GPU: ${GPU_ID}"
 echo "  smoke: grasp_classify seed 9000000"
-echo "  full: 100 fixed seeds per task"
+echo "  full: 7 remaining tasks, 100 fixed seeds per task"
 echo "  log: ${SUITE_DIR}/suite.log"

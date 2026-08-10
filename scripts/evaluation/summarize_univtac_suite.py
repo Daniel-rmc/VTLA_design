@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--group-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--tasks", nargs="+", choices=TASKS, default=list(TASKS))
     return parser.parse_args()
 
 
@@ -32,7 +33,7 @@ def main() -> None:
     args = parse_args()
     rows = []
     missing = []
-    for task in TASKS:
+    for task in args.tasks:
         aggregate_path = args.group_dir / task / "eval" / "univtac" / "aggregate_result.json"
         if not aggregate_path.is_file():
             missing.append(task)
@@ -53,7 +54,7 @@ def main() -> None:
     total_successes = sum(row["successes"] for row in rows)
     total_episodes = sum(row["episodes"] for row in rows)
     summary = {
-        "evaluation_type": "UniVTAC eight-task simulator benchmark",
+        "evaluation_type": "UniVTAC simulator task suite",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "checkpoint_policy": "per-task stage2_last.ckpt at optimizer step 4000",
         "seed_range_per_task": {"start": 1000000, "end": 1000099},
@@ -70,7 +71,7 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(
-        f"UniVTAC suite: tasks={len(rows)}/{len(TASKS)}, complete={complete}, "
+        f"UniVTAC suite: tasks={len(rows)}/{len(args.tasks)}, complete={complete}, "
         f"macro={summary['macro_average_success_rate_percent']}"
     )
     if not complete:

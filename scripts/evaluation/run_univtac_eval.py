@@ -96,6 +96,13 @@ def main():
 
     environment = os.environ.copy()
     environment["CUDA_VISIBLE_DEVICES"] = args.gpu
+    environment["PYTHONUNBUFFERED"] = "1"
+    # A detached tmux launched from an SSH session can retain a stale
+    # DISPLAY=localhost:* value. Isaac Sim is headless here and must not bind
+    # its lifecycle to that X11 forwarding socket.
+    if args.headless:
+        environment.pop("DISPLAY", None)
+        environment.pop("XAUTHORITY", None)
     # An absolute Python path does not activate its Conda environment. Add the
     # environment's bin directory explicitly so UniVTAC can launch ffmpeg and
     # other runtime tools installed alongside Python.
@@ -122,6 +129,7 @@ def main():
         "max_seed": args.max_seed,
         "expert_check": args.expert_check,
         "headless": args.headless,
+        "display_removed": args.headless,
     }
     (archive_dir / "request.json").write_text(
         json.dumps(request, indent=2) + "\n", encoding="utf-8"

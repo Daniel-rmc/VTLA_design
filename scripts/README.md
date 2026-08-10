@@ -32,8 +32,8 @@ scripts/training/start_official_tasks.sh
 | `scripts.evaluation.eval_vtla_offline` | 在 checkpoint 记录的 train/validation episode 上运行确定性离线评测 |
 | `scripts.evaluation.run_univtac_eval` | 调用 UniVTAC、固定 GPU，并归档请求/配置/日志/结果 |
 | `scripts.evaluation.summarize_univtac_eval` | 按 seed 合并分片，检查缺失、重复、错误、视频和 metadata |
-| `evaluation/start_official_suite_eval.sh` | 冒烟通过后，在 GPU 0 依次评测 8 个 4000-step 官方任务 |
-| `scripts.evaluation.summarize_univtac_suite` | 合并 8 个逐任务聚合结果，计算 benchmark macro/micro 平均 |
+| `evaluation/start_official_suite_eval.sh` | 复用已通过的冒烟检查，在 GPU 0 依次评测尚未覆盖的 7 个官方任务 |
+| `scripts.evaluation.summarize_univtac_suite` | 合并指定任务的逐任务结果，计算 suite macro/micro 平均 |
 
 示例：
 
