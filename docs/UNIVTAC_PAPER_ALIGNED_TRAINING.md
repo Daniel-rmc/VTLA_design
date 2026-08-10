@@ -47,7 +47,13 @@
 scripts/training/start_official_tasks.sh
 ```
 
-调度为：GPU 1 依次运行 `grasp_classify -> insert_tube`，GPU 2 运行 `insert_HDMI`，GPU 3 运行 `insert_hole`。每个任务目录包含：
+首轮调度为：GPU 1 依次运行 `grasp_classify -> insert_tube`，GPU 2 运行 `insert_HDMI`，GPU 3 运行 `insert_hole`。完整官方数据下载并验证后，可在同一 run group 中续跑：
+
+```bash
+scripts/training/continue_official_tasks.sh runs/stage2/official_<timestamp>_<git>_gpu123
+```
+
+续跑调度为：空闲的 GPU 3 依次运行 `lift_bottle -> lift_can`；GPU 2 在确认 `insert_HDMI/exit_code=0` 后依次运行 `pull_out_key -> put_bottle_in_shelf`。论文 Appendix B 指定 `lift_bottle` 与 `insert_tube` 使用 head+wrist，其余任务只使用 head。GPU 1 原有队列不变。每个任务目录包含：
 
 ```text
 runs/stage2/official_<timestamp>_<git>_gpu123/<task>/

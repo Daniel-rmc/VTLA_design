@@ -20,7 +20,9 @@ run_task() {
     local ckpt_dir="${run_dir}/checkpoints"
     local -a camera_args=(--camera_names cam_high)
 
-    if [[ "${task_name}" == "insert_tube" ]]; then
+    # Appendix B of the UniVTAC paper uses both third-person and wrist views
+    # for insert_tube and lift_bottle; the other benchmark tasks use head only.
+    if [[ "${task_name}" == "insert_tube" || "${task_name}" == "lift_bottle" ]]; then
         camera_args=(--camera_names cam_high cam_wrist)
     fi
 

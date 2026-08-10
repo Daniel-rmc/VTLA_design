@@ -54,7 +54,11 @@
     "grasp_classify": ["cam_high"],
     "insert_HDMI": ["cam_high"],
     "insert_hole": ["cam_high"],
-    "insert_tube": ["cam_high", "cam_wrist"]
+    "insert_tube": ["cam_high", "cam_wrist"],
+    "lift_bottle": ["cam_high", "cam_wrist"],
+    "lift_can": ["cam_high"],
+    "pull_out_key": ["cam_high"],
+    "put_bottle_in_shelf": ["cam_high"]
   },
   "known_model_specific_differences": [
     "VTLA retains its bidirectional visual-tactile fusion and action-head architecture rather than becoming ACT.",
