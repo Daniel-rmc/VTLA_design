@@ -1,0 +1,483 @@
+{
+  "created_at_utc": "2026-08-10T06:38:10.982766+00:00",
+  "source": "huggingface://datasets/byml/UniVTAC/lift_can/clean",
+  "task_name": "lift_can",
+  "dataset_dir": "/home/rmc/workspace/UniVTAC/data/official/lift_can/clean",
+  "available_episode_count": 100,
+  "episode_count": 50,
+  "selection": "first 50 numerically sorted episodes",
+  "camera_names": [
+    "cam_high"
+  ],
+  "training_sample_count": 9122,
+  "raw_joint_dim": 9,
+  "model_joint_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "control_layout": "7 arm joints + 1 gripper command",
+  "metadata_sha256": "128f1ab7e4f37f37306f1f216217f6bf1ceef3305467ed66990d47c653e187ee",
+  "total_hdf5_bytes": 7145476111,
+  "episodes": [
+    {
+      "episode": "0.hdf5",
+      "bytes": 132373510,
+      "sha256": "455575219f986a9a8ddc05739110735ada09104f38923944bd794a61bb0ed947",
+      "frames": 170,
+      "training_samples": 169,
+      "seed": 0,
+      "result": null
+    },
+    {
+      "episode": "1.hdf5",
+      "bytes": 172057800,
+      "sha256": "74d5e7a0dfac3756021828d39341e56ca236058704c4bf374a7796dc7108f025",
+      "frames": 220,
+      "training_samples": 219,
+      "seed": 1,
+      "result": null
+    },
+    {
+      "episode": "2.hdf5",
+      "bytes": 130859560,
+      "sha256": "b61436550a4eb85757821683e2cc22de434d0f012a5971df13c6fff1e3b2f8d0",
+      "frames": 168,
+      "training_samples": 167,
+      "seed": 2,
+      "result": null
+    },
+    {
+      "episode": "3.hdf5",
+      "bytes": 134656780,
+      "sha256": "12885dc82e9bcb0bcecb15d8d8701a80ea0c926a183e82b3480e9737b42a6882",
+      "frames": 173,
+      "training_samples": 172,
+      "seed": 3,
+      "result": null
+    },
+    {
+      "episode": "4.hdf5",
+      "bytes": 141499322,
+      "sha256": "ef3dc55957d2405c04b498f184fb26f48554b67e60a815eb6b780f1ede121d07",
+      "frames": 182,
+      "training_samples": 181,
+      "seed": 4,
+      "result": null
+    },
+    {
+      "episode": "5.hdf5",
+      "bytes": 134925449,
+      "sha256": "b056ce566a8897c2afe1c37f06b96621ea40cc50507f52292fb28fa3704b1421",
+      "frames": 173,
+      "training_samples": 172,
+      "seed": 5,
+      "result": null
+    },
+    {
+      "episode": "6.hdf5",
+      "bytes": 136897928,
+      "sha256": "2de0415d955148898f2adcf8af504febb60ab0fcb0f48f7d258d63c83c701dc0",
+      "frames": 176,
+      "training_samples": 175,
+      "seed": 6,
+      "result": null
+    },
+    {
+      "episode": "7.hdf5",
+      "bytes": 131775270,
+      "sha256": "17d79a5562b0d36a664a565c5eb0e37dfe5a11f79d8ff83fa16e922bf75e0101",
+      "frames": 169,
+      "training_samples": 168,
+      "seed": 7,
+      "result": null
+    },
+    {
+      "episode": "8.hdf5",
+      "bytes": 132444570,
+      "sha256": "d4d6ae76a109f72685011dc8f76c24e94a5a37811ee1f00238571b3d342f31b4",
+      "frames": 170,
+      "training_samples": 169,
+      "seed": 8,
+      "result": null
+    },
+    {
+      "episode": "9.hdf5",
+      "bytes": 130771360,
+      "sha256": "dd061bff9de87564391ca2b8c190161c95ab7e6f31d7a0bea7338f87900a6110",
+      "frames": 168,
+      "training_samples": 167,
+      "seed": 9,
+      "result": null
+    },
+    {
+      "episode": "10.hdf5",
+      "bytes": 173603453,
+      "sha256": "588278dcdf3276801281615635fae3960aa0cdd2c8e4611782e4abd0edf4c84a",
+      "frames": 223,
+      "training_samples": 222,
+      "seed": 10,
+      "result": null
+    },
+    {
+      "episode": "11.hdf5",
+      "bytes": 136096050,
+      "sha256": "1a17f2863150b91eaf1711f64d35451137a0e886c856980bb67dd3adf9c8cb2a",
+      "frames": 175,
+      "training_samples": 174,
+      "seed": 11,
+      "result": null
+    },
+    {
+      "episode": "12.hdf5",
+      "bytes": 128635630,
+      "sha256": "56204449c908d1a629b576ed22e8dcb62cdba05baf2f9c86ac5fa3a04ffe3be7",
+      "frames": 165,
+      "training_samples": 164,
+      "seed": 12,
+      "result": null
+    },
+    {
+      "episode": "13.hdf5",
+      "bytes": 133246465,
+      "sha256": "61061f77d24230661e14ef3cdf65bb85582c2e6746fdf78c1bdca1c5bdb6c480",
+      "frames": 171,
+      "training_samples": 170,
+      "seed": 13,
+      "result": null
+    },
+    {
+      "episode": "14.hdf5",
+      "bytes": 173058142,
+      "sha256": "6b231a7a4c6108933f52ef2da0b52b21494b8e3a2599cdfdc72454ac928e2f94",
+      "frames": 222,
+      "training_samples": 221,
+      "seed": 14,
+      "result": null
+    },
+    {
+      "episode": "15.hdf5",
+      "bytes": 130155556,
+      "sha256": "c9dd7231603cfb00e71e93f691edbf1ef05a58f41afe553fee3173abe0306289",
+      "frames": 167,
+      "training_samples": 166,
+      "seed": 15,
+      "result": null
+    },
+    {
+      "episode": "16.hdf5",
+      "bytes": 170691070,
+      "sha256": "2794ad2b015e8d433e4ca8f8f42b1fd4edf0275140bea1c56c01a50e190cef28",
+      "frames": 219,
+      "training_samples": 218,
+      "seed": 16,
+      "result": null
+    },
+    {
+      "episode": "17.hdf5",
+      "bytes": 128447200,
+      "sha256": "2781ef2d9352b6272e1613c580bd1af93022c2ac91daf48cdd53c32837d2e695",
+      "frames": 165,
+      "training_samples": 164,
+      "seed": 17,
+      "result": null
+    },
+    {
+      "episode": "18.hdf5",
+      "bytes": 131631789,
+      "sha256": "8985c99ecf2e4f743cf55e690f50424c7bc55127f800ec432a631ac140905379",
+      "frames": 169,
+      "training_samples": 168,
+      "seed": 18,
+      "result": "success"
+    },
+    {
+      "episode": "19.hdf5",
+      "bytes": 127941080,
+      "sha256": "0a57ca3cedf3d9bf9c87df75c850aecc6a28ddfc470666539046dcf95bc538c5",
+      "frames": 164,
+      "training_samples": 163,
+      "seed": 19,
+      "result": "success"
+    },
+    {
+      "episode": "20.hdf5",
+      "bytes": 151050292,
+      "sha256": "87cd947e83aa5bc62856ac03aad3c650f63cd31694c460b5f7c49c47be8f399d",
+      "frames": 194,
+      "training_samples": 193,
+      "seed": 20,
+      "result": "success"
+    },
+    {
+      "episode": "21.hdf5",
+      "bytes": 198909640,
+      "sha256": "28cee9627aec84a4fdd516fd83fb712677bd05c5d2a7312b3137adda6f295df5",
+      "frames": 255,
+      "training_samples": 254,
+      "seed": 21,
+      "result": "success"
+    },
+    {
+      "episode": "22.hdf5",
+      "bytes": 215914924,
+      "sha256": "99dcf6ca7f6dda9f3feebec57ec4e98b5b57f8e5de13051c62e51478db2bc3c3",
+      "frames": 277,
+      "training_samples": 276,
+      "seed": 22,
+      "result": "success"
+    },
+    {
+      "episode": "23.hdf5",
+      "bytes": 138552530,
+      "sha256": "b422af2291a9f7701159634bcb25be8fc93a5ba353f696d40c17882c30da2c82",
+      "frames": 178,
+      "training_samples": 177,
+      "seed": 23,
+      "result": "success"
+    },
+    {
+      "episode": "24.hdf5",
+      "bytes": 151854355,
+      "sha256": "eb57ce09d87daec4caecd93e15efaca75c85855dac557ea7f64202866f586615",
+      "frames": 195,
+      "training_samples": 194,
+      "seed": 24,
+      "result": "success"
+    },
+    {
+      "episode": "25.hdf5",
+      "bytes": 161736136,
+      "sha256": "8dab228ff2ac4a2134000a84e2086d529120e2073c83298f5efc905500cf9dab",
+      "frames": 207,
+      "training_samples": 206,
+      "seed": 25,
+      "result": "success"
+    },
+    {
+      "episode": "26.hdf5",
+      "bytes": 134666295,
+      "sha256": "488708d318dabe090b2c08ddca0a79e70aee790521c917159f04292066e3c030",
+      "frames": 173,
+      "training_samples": 172,
+      "seed": 26,
+      "result": "success"
+    },
+    {
+      "episode": "27.hdf5",
+      "bytes": 133881272,
+      "sha256": "e8644a085d3bc62d695c1dbb4e4cc355bf21d42325f538ac0d786b4f13dcb4aa",
+      "frames": 172,
+      "training_samples": 171,
+      "seed": 27,
+      "result": "success"
+    },
+    {
+      "episode": "28.hdf5",
+      "bytes": 134833932,
+      "sha256": "aaed6873ff6941defd9e0d5ce1aaef6503491b597b63e34280ce2022e8bf3def",
+      "frames": 173,
+      "training_samples": 172,
+      "seed": 28,
+      "result": "success"
+    },
+    {
+      "episode": "29.hdf5",
+      "bytes": 133878864,
+      "sha256": "f57e57e8941617a11fbb584ae09ed4771f6281091c4d4c2d991624ca5cde6d1f",
+      "frames": 172,
+      "training_samples": 171,
+      "seed": 29,
+      "result": "success"
+    },
+    {
+      "episode": "30.hdf5",
+      "bytes": 136118800,
+      "sha256": "52770b0d6fe4cff164bcdade5ac27bad0eb2c67f4e7500d97b03753ddaa8edf1",
+      "frames": 175,
+      "training_samples": 174,
+      "seed": 30,
+      "result": "success"
+    },
+    {
+      "episode": "31.hdf5",
+      "bytes": 167067912,
+      "sha256": "ace05971821115e61d51dcf6ba9dccd55a99ce2c17ddbc772e7a98ce1178a57e",
+      "frames": 214,
+      "training_samples": 213,
+      "seed": 31,
+      "result": "success"
+    },
+    {
+      "episode": "32.hdf5",
+      "bytes": 130806304,
+      "sha256": "a5c87eb53091d322770b5d52a8491746ae1e7559c9db2813682b58fa7ee80f55",
+      "frames": 168,
+      "training_samples": 167,
+      "seed": 32,
+      "result": "success"
+    },
+    {
+      "episode": "33.hdf5",
+      "bytes": 129259092,
+      "sha256": "e94b03d94bb0374e1370999794c3675e1071d590719145d0d6754142b14edfb9",
+      "frames": 166,
+      "training_samples": 165,
+      "seed": 33,
+      "result": "success"
+    },
+    {
+      "episode": "34.hdf5",
+      "bytes": 172672061,
+      "sha256": "e876227249d10a0388c3ee6e6f328d4869d3b41679b13019d286f669df9158c4",
+      "frames": 221,
+      "training_samples": 220,
+      "seed": 34,
+      "result": "success"
+    },
+    {
+      "episode": "35.hdf5",
+      "bytes": 133789596,
+      "sha256": "0fd9e6e25abde4af7317c881f75f44c458699d54bc67a79aa8d198cf5a35fc37",
+      "frames": 172,
+      "training_samples": 171,
+      "seed": 35,
+      "result": "success"
+    },
+    {
+      "episode": "36.hdf5",
+      "bytes": 139454504,
+      "sha256": "6fc5145ae90720860c3d491a36584149449f7edd709f0ff6df38b91db2750993",
+      "frames": 179,
+      "training_samples": 178,
+      "seed": 36,
+      "result": "success"
+    },
+    {
+      "episode": "37.hdf5",
+      "bytes": 129271708,
+      "sha256": "d8ed9c16775ffa82b0488989bbe2ce1e5709fc71970cb3cc0f4acc68648e7748",
+      "frames": 166,
+      "training_samples": 165,
+      "seed": 37,
+      "result": "success"
+    },
+    {
+      "episode": "38.hdf5",
+      "bytes": 162079544,
+      "sha256": "29a05eabf7886e6d769aae16812ff394c549ab63eca8e516f588291dc66d89b1",
+      "frames": 208,
+      "training_samples": 207,
+      "seed": 38,
+      "result": "success"
+    },
+    {
+      "episode": "39.hdf5",
+      "bytes": 127492868,
+      "sha256": "6f4518df7edf649c577b0ef66c3dce9906b918cb00684913fa020b8d7ff600bc",
+      "frames": 164,
+      "training_samples": 163,
+      "seed": 39,
+      "result": "success"
+    },
+    {
+      "episode": "40.hdf5",
+      "bytes": 128525245,
+      "sha256": "79285fa183df6265742665586dc00e1f109dfe39fc54d0fab14dfef2b553b3a0",
+      "frames": 165,
+      "training_samples": 164,
+      "seed": 40,
+      "result": "success"
+    },
+    {
+      "episode": "41.hdf5",
+      "bytes": 126829844,
+      "sha256": "dacd7f220170dd40e3574fc1693ad732f1761db3f43cb9d9eef347167ca0cea4",
+      "frames": 163,
+      "training_samples": 162,
+      "seed": 41,
+      "result": "success"
+    },
+    {
+      "episode": "42.hdf5",
+      "bytes": 127604880,
+      "sha256": "9728cbe6b71bd5b27f15ac5423570f1f505f2c2c590b7123af11c5d9cf9f058f",
+      "frames": 164,
+      "training_samples": 163,
+      "seed": 42,
+      "result": "success"
+    },
+    {
+      "episode": "43.hdf5",
+      "bytes": 130059531,
+      "sha256": "184926b8bbf2e0a3cda8bac28bb4f78e709a837d8644e10a8dc347a33289aab7",
+      "frames": 167,
+      "training_samples": 166,
+      "seed": 43,
+      "result": "success"
+    },
+    {
+      "episode": "44.hdf5",
+      "bytes": 180140743,
+      "sha256": "73c4439d1754b452403dcad5440236f8f2507b1ac7401e88c1e3e1ee657ae886",
+      "frames": 231,
+      "training_samples": 230,
+      "seed": 44,
+      "result": "success"
+    },
+    {
+      "episode": "45.hdf5",
+      "bytes": 133098037,
+      "sha256": "6f5ce60c6d41da39771ed67312800cd629e9904de17773596b6f52b63fca8beb",
+      "frames": 171,
+      "training_samples": 170,
+      "seed": 45,
+      "result": "success"
+    },
+    {
+      "episode": "46.hdf5",
+      "bytes": 129180574,
+      "sha256": "9f316a721ef9c0449b498254fb7ba4a7e8c3afd6a6272852c620028bb90bee7d",
+      "frames": 166,
+      "training_samples": 165,
+      "seed": 46,
+      "result": "success"
+    },
+    {
+      "episode": "47.hdf5",
+      "bytes": 127673104,
+      "sha256": "2317f724a61a62f34800cd7a5ac18c2a6a1076219ea8c151126ce64be5ffdbc3",
+      "frames": 164,
+      "training_samples": 163,
+      "seed": 47,
+      "result": "success"
+    },
+    {
+      "episode": "48.hdf5",
+      "bytes": 132569180,
+      "sha256": "a56c0b6f9bedf4f6730d427882337eb71eb75e6060aceec51fbced8e58ef9266",
+      "frames": 170,
+      "training_samples": 169,
+      "seed": 48,
+      "result": "success"
+    },
+    {
+      "episode": "49.hdf5",
+      "bytes": 134736360,
+      "sha256": "bc59a686c6b994c15599872b3b15e1241868b5f8be2230fe68b92378db18da4f",
+      "frames": 173,
+      "training_samples": 172,
+      "seed": 49,
+      "result": "success"
+    }
+  ],
+  "result_counts": {
+    "null": 18,
+    "success": 32
+  }
+}
