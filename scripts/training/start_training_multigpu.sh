@@ -66,7 +66,7 @@ case "${STAGE}" in
     stage2)
         BATCH_SIZE="${BATCH_SIZE:-64}"
         NUM_EPOCHS="${NUM_EPOCHS:-150}"
-        EXTRA_ARGS="--camera_names cam_high cam_wrist --chunk_size 50 --joint_indices 0 1 2 3 4 5 6 7 --val_fraction 0.1 --val_seed 20260809 --val_freq 5 --amp_dtype bfloat16"
+        EXTRA_ARGS="--camera_names cam_high cam_wrist --chunk_size 50 --joint_indices 0 1 2 3 4 5 6 7 --val_fraction 0.1 --val_seed 20260809 --split_strategy stratified_grasp --normalization_scope train --normalize_tactile --val_freq 5 --amp_dtype bfloat16"
         latest_stage1=$(ls -t "${PROJECT_DIR}"/runs/stage1/*/checkpoints/stage1_epoch_*.ckpt 2>/dev/null | head -n 1 || true)
         if [[ -n "${latest_stage1}" ]]; then
             EXTRA_ARGS+=" --stage1_ckpt ${latest_stage1}"
@@ -75,7 +75,7 @@ case "${STAGE}" in
     stage3)
         BATCH_SIZE="${BATCH_SIZE:-32}"
         NUM_EPOCHS="${NUM_EPOCHS:-200}"
-        EXTRA_ARGS="--camera_names cam_high cam_wrist --chunk_size 50 --joint_indices 0 1 2 3 4 5 6 7 --val_fraction 0.1 --val_seed 20260809 --val_freq 5 --amp_dtype bfloat16"
+        EXTRA_ARGS="--camera_names cam_high cam_wrist --chunk_size 50 --joint_indices 0 1 2 3 4 5 6 7 --val_fraction 0.1 --val_seed 20260809 --split_strategy stratified_grasp --normalization_scope train --normalize_tactile --val_freq 5 --amp_dtype bfloat16"
         latest_stage2=$(ls -t "${PROJECT_DIR}"/runs/stage2/*/checkpoints/stage2_epoch_*.ckpt 2>/dev/null | head -n 1 || true)
         if [[ -z "${latest_stage2}" ]]; then
             echo "Error: Stage 3 requires a Stage 2 checkpoint" >&2

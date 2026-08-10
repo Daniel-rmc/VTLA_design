@@ -129,6 +129,8 @@ def append_epoch_metrics(
     epoch: int,
     losses: Dict[str, Any],
     validation_losses: Optional[Dict[str, Any]] = None,
+    optimizer_step: Optional[int] = None,
+    training_examples_seen: Optional[int] = None,
 ) -> None:
     path = Path(run_dir)
     path.mkdir(parents=True, exist_ok=True)
@@ -137,6 +139,10 @@ def append_epoch_metrics(
         'epoch': epoch + 1,
         'losses': _mean_losses(losses),
     }
+    if optimizer_step is not None:
+        record['optimizer_step'] = int(optimizer_step)
+    if training_examples_seen is not None:
+        record['training_examples_seen'] = int(training_examples_seen)
     if validation_losses is not None:
         record['validation_losses'] = _mean_losses(validation_losses)
     with (path / 'metrics.jsonl').open('a', encoding='utf-8') as stream:

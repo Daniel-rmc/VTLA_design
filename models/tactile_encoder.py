@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from torchvision import models
 from typing import Optional, Sequence
+from pathlib import Path
 
 
 class TactileEncoder(nn.Module):
@@ -106,6 +107,55 @@ class TactileEncoder(nn.Module):
         B, D, H, W = features.shape
         tokens = features.flatten(2).permute(0, 2, 1)  # [B, H'*W', D]
         return tokens
+
+    def load_univtac_resnet_checkpoint(self, checkpoint_path: str | Path) -> dict:
+        """Load the convolutional trunk from an official UniVTAC encoder.
+
+        UniVTAC stores a full torchvision ResNet under ``backbone.*`` while
+        VTLA keeps its convolutional children in a sequential module and adds
+        a spatial feature projection.  The classifier and auxiliary decoders
+        are therefore intentionally ignored.
+        """
+        checkpoint_path = Path(checkpoint_path).expanduser().resolve()
+        if not checkpoint_path.is_file():
+            raise FileNotFoundError(f"Tactile backbone checkpoint not found: {checkpoint_path}")
+        state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+        if isinstance(state, dict):
+            state = state.get('model_state_dict', state.get('state_dict', state))
+
+        child_map = {
+            'conv1': '0',
+            'bn1': '1',
+            'layer1': '4',
+            'layer2': '5',
+            'layer3': '6',
+            'layer4': '7',
+        }
+        mapped = {}
+        ignored = []
+        for raw_key, value in state.items():
+            key = raw_key.removeprefix('module.').removeprefix('encoder.')
+            if not key.startswith('backbone.'):
+                ignored.append(raw_key)
+                continue
+            suffix = key.removeprefix('backbone.')
+            root, separator, remainder = suffix.partition('.')
+            if root not in child_map or not separator:
+                ignored.append(raw_key)
+                continue
+            mapped[f"{child_map[root]}.{remainder}"] = value
+
+        incompatible = self.backbone.load_state_dict(mapped, strict=False)
+        loaded = len(mapped) - len(incompatible.unexpected_keys)
+        if loaded == 0:
+            raise RuntimeError(f"No ResNet trunk weights were loaded from {checkpoint_path}")
+        return {
+            'path': str(checkpoint_path),
+            'loaded_tensors': loaded,
+            'ignored_tensors': len(ignored),
+            'missing_keys': list(incompatible.missing_keys),
+            'unexpected_keys': list(incompatible.unexpected_keys),
+        }
 
 
 class TactileEncoderWithRefine(nn.Module):

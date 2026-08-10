@@ -1,0 +1,65 @@
+{
+  "profile": "univtac_paper_aligned_v1",
+  "sources": {
+    "paper": "https://arxiv.org/abs/2602.10093",
+    "official_repository": "https://github.com/univtac/UniVTAC",
+    "official_train_config": "https://github.com/univtac/UniVTAC/blob/main/policy/ACT/train_config.yml"
+  },
+  "data": {
+    "dataset_root": "/home/rmc/workspace/UniVTAC/data/official",
+    "selection": "episodes 0-49 in numeric filename order",
+    "selected_episodes_per_task": 50,
+    "split": "official NumPy RandomState(seed=1) permutation; leading 80% train, trailing 20% validation",
+    "normalization": "separate qpos=x[t] and action=x[t+1] statistics over all 50 selected episodes",
+    "raw_joint_dimension": 9,
+    "model_joint_indices": [0, 1, 2, 3, 4, 5, 6, 7],
+    "model_state_dimension": 8
+  },
+  "training": {
+    "optimizer": "AdamW",
+    "optimizer_steps": 4000,
+    "global_batch_size": 64,
+    "nominal_sample_draws": 256000,
+    "learning_rate": 0.00001,
+    "vision_backbone_learning_rate": 0.00001,
+    "tactile_backbone_learning_rate": 0.00001,
+    "weight_decay": 0.0001,
+    "learning_rate_scheduler": "none",
+    "gradient_clipping": "disabled",
+    "precision": "bfloat16",
+    "seed": 0,
+    "checkpoint_every_steps": 1000
+  },
+  "model": {
+    "chunk_size": 50,
+    "temporal_aggregation": true,
+    "temporal_aggregation_decay": 0.01,
+    "hidden_dimension": 512,
+    "feedforward_dimension": 3200,
+    "attention_heads": 8,
+    "transformer_encoder_layers": 4,
+    "transformer_decoder_layers": 7,
+    "dropout": 0.1,
+    "kl_weight": 10.0,
+    "padding_loss_weight": 0.0,
+    "l1_reduction": "official_mean",
+    "vision_backbone": "resnet18",
+    "tactile_backbone": "resnet18",
+    "tactile_backbone_batchnorm": "frozen, matching official UniVTAC ACT",
+    "tactile_position_embedding": "learned",
+    "tactile_input_normalization": "[0, 1], matching official UniVTAC ACT",
+    "tactile_initialization": "/home/rmc/workspace/UniVTAC/policy/ACT/encoder/checkpoints/resnet18/official/encoder.pth"
+  },
+  "tasks": {
+    "grasp_classify": ["cam_high"],
+    "insert_HDMI": ["cam_high"],
+    "insert_hole": ["cam_high"],
+    "insert_tube": ["cam_high", "cam_wrist"]
+  },
+  "known_model_specific_differences": [
+    "VTLA retains its bidirectional visual-tactile fusion and action-head architecture rather than becoming ACT.",
+    "The UniVTAC encoder convolutional trunk is loaded exactly; VTLA's spatial projection and fusion layers are newly initialized.",
+    "BF16 is used for throughput because the paper does not report arithmetic precision.",
+    "The repository's official loop has a greater-than stopping condition that executes 4001 steps; the paper-stated budget of exactly 4000 is used here."
+  ]
+}

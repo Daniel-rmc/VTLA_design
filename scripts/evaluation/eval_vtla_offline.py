@@ -87,6 +87,7 @@ def main():
         joint_indices=stats.get("joint_indices"),
         episode_files=episode_files,
         normalization_stats=stats,
+        normalize_tactile=training.get("normalize_tactile", True),
         verbose=True,
     )
     loader = DataLoader(
@@ -97,8 +98,11 @@ def main():
         pin_memory=device.type == "cuda",
     )
 
-    joint_mean = torch.tensor(stats["joint_mean"], dtype=torch.float32, device=device)
-    joint_std = torch.tensor(stats["joint_std"], dtype=torch.float32, device=device)
+    action_std = torch.tensor(
+        stats.get("action_std", stats["joint_std"]),
+        dtype=torch.float32,
+        device=device,
+    )
 
     normalized_abs_sum = 0.0
     raw_abs_sum = 0.0
@@ -120,7 +124,7 @@ def main():
             predictions = model(qpos, cameras, tactile)
             valid = ~is_pad
             normalized_error = (predictions - targets).abs()
-            raw_error = normalized_error * joint_std.view(1, 1, -1)
+            raw_error = normalized_error * action_std.view(1, 1, -1)
             valid_3d = valid.unsqueeze(-1)
 
             normalized_abs_sum += (normalized_error * valid_3d).sum().item()
@@ -161,6 +165,7 @@ def main():
             "chunk_size": training["chunk_size"],
             "state_dim": training["state_dim"],
             "joint_indices": stats.get("joint_indices", list(range(training["state_dim"]))),
+            "normalize_tactile": training.get("normalize_tactile", True),
             "latent": "zero (deployment path)",
         },
         "limitations": [

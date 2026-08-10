@@ -16,10 +16,13 @@ from .action_heads import DualPathActionHead
 # 添加同一 workspace 下的 UniVTAC 路径。环境变量仍可覆盖模块搜索，
 # 但独立评测脚本不应依赖训练启动器注入 PYTHONPATH。
 univtac_base = Path(__file__).resolve().parents[2] / 'UniVTAC'
-univtac_detr = univtac_base / 'policy' / 'ACT' / 'detr'
 if univtac_base.is_dir():
-    sys.path.insert(0, str(univtac_base))
-    sys.path.insert(0, str(univtac_detr))
+    # Keep the local VTLA ``models`` package ahead of UniVTAC.  Prepending
+    # UniVTAC's DETR directory makes multiprocessing workers resolve
+    # ``models`` to the wrong package when they re-import this module.
+    univtac_path = str(univtac_base)
+    if univtac_path not in sys.path:
+        sys.path.append(univtac_path)
 
 try:
     from policy.ACT.detr.models.backbone import build_backbone
@@ -108,7 +111,8 @@ class VTLAModel(nn.Module):
         nheads: int = 8,
         cross_attn_layers: int = 2,
         use_tactile_refine: bool = True,
-        refine_scale: float = 0.1
+        refine_scale: float = 0.1,
+        tactile_position_embedding: str = 'sine',
     ):
         super().__init__()
 
@@ -117,6 +121,7 @@ class VTLAModel(nn.Module):
         self.tactile_names = tactile_names
         self.hidden_dim = hidden_dim
         self.use_tactile_refine = use_tactile_refine
+        self.tactile_position_embedding = tactile_position_embedding
 
         # 1. 特征提取模块
         self.vision_backbone = vision_backbone
@@ -134,6 +139,14 @@ class VTLAModel(nn.Module):
         self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
         self.vision_source_embed = nn.Embedding(len(camera_names), hidden_dim)
         self.tactile_source_embed = nn.Embedding(len(tactile_names), hidden_dim)
+        self.tactile_position_embed = (
+            nn.Embedding(1024, hidden_dim)
+            if tactile_position_embedding == 'learned' else None
+        )
+        if tactile_position_embedding not in {'sine', 'learned'}:
+            raise ValueError(
+                f"Unsupported tactile position embedding: {tactile_position_embedding}"
+            )
 
         # 3. 视触觉交叉注意力融合
         self.cross_modal_fusion = BiDirectionalCrossAttention(
@@ -262,10 +275,23 @@ class VTLAModel(nn.Module):
                 tac_image[:, tac_id], return_tokens=True
             )  # [B, D, H', W']
             tac_feat = self.tactile_input_proj(tac_feat)
-            tactile_pos = get_2d_sinusoid_encoding(
-                tac_feat.shape[-2], tac_feat.shape[-1], self.hidden_dim,
-                tac_feat.device, tac_feat.dtype,
-            )
+            if self.tactile_position_embed is not None:
+                tactile_token_count = tac_feat.shape[-2] * tac_feat.shape[-1]
+                if tactile_token_count > self.tactile_position_embed.num_embeddings:
+                    raise ValueError(
+                        f"Tactile feature map has {tactile_token_count} tokens, exceeding "
+                        f"the learned-position capacity of "
+                        f"{self.tactile_position_embed.num_embeddings}"
+                    )
+                tactile_pos = self.tactile_position_embed.weight[:tactile_token_count]
+                tactile_pos = tactile_pos.transpose(0, 1).reshape(
+                    1, self.hidden_dim, tac_feat.shape[-2], tac_feat.shape[-1]
+                )
+            else:
+                tactile_pos = get_2d_sinusoid_encoding(
+                    tac_feat.shape[-2], tac_feat.shape[-1], self.hidden_dim,
+                    tac_feat.device, tac_feat.dtype,
+                )
             source = self.tactile_source_embed.weight[tac_id].view(1, -1, 1, 1)
             all_tactile_features.append(tac_feat + tactile_pos + source)
 
@@ -386,7 +412,13 @@ class VTLAPolicy(nn.Module):
         self.refine_weight = _cfg(args_override, 'refine_weight', 0.5)
         self.contact_weight = _cfg(args_override, 'contact_weight', 0.1)
         self.pad_weight = _cfg(args_override, 'pad_weight', 1.0)
+        self.l1_reduction = _cfg(args_override, 'l1_reduction', 'valid_mean')
+        self.freeze_tactile_batchnorm = _cfg(
+            args_override, 'freeze_tactile_batchnorm', False
+        )
         self.set_stage(stage)
+        if self.freeze_tactile_batchnorm:
+            self._freeze_tactile_batchnorm()
 
     def set_stage(self, stage: str):
         """
@@ -435,7 +467,19 @@ class VTLAPolicy(nn.Module):
             head.contact_detector.train()
             if head.adaptive_scale:
                 head.scale_predictor.train()
+        if mode and self.freeze_tactile_batchnorm:
+            for module in self.model.tactile_encoder.backbone.modules():
+                if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                    module.eval()
         return self
+
+    def _freeze_tactile_batchnorm(self):
+        """Match the fixed normalization used by UniVTAC's tactile ResNet."""
+        for module in self.model.tactile_encoder.backbone.modules():
+            if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                module.eval()
+                for parameter in module.parameters():
+                    parameter.requires_grad = False
 
     def forward(
         self,
@@ -480,7 +524,14 @@ class VTLAPolicy(nn.Module):
         # 主动作L1损失
         all_l1 = F.l1_loss(a_hat, actions, reduction='none')
         valid = (~is_pad).unsqueeze(-1).expand_as(all_l1)
-        l1 = (all_l1 * valid).sum() / valid.sum().clamp_min(1)
+        if self.l1_reduction == 'official_mean':
+            # Matches UniVTAC ACT: padded elements contribute zero to the
+            # numerator but remain in the tensor-wide mean denominator.
+            l1 = (all_l1 * valid).mean()
+        elif self.l1_reduction == 'valid_mean':
+            l1 = (all_l1 * valid).sum() / valid.sum().clamp_min(1)
+        else:
+            raise ValueError(f"Unsupported l1_reduction: {self.l1_reduction}")
         loss_dict['l1'] = l1
 
         pad_loss = F.binary_cross_entropy_with_logits(
@@ -592,7 +643,8 @@ def build_vtla_model(args):
         nheads=args.nheads,
         cross_attn_layers=_cfg(args, 'cross_attn_layers', 2),
         use_tactile_refine=_cfg(args, 'use_tactile_refine', True),
-        refine_scale=_cfg(args, 'refine_scale', 0.1)
+        refine_scale=_cfg(args, 'refine_scale', 0.1),
+        tactile_position_embedding=_cfg(args, 'tactile_position_embedding', 'sine'),
     )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)

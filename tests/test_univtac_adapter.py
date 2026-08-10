@@ -80,3 +80,52 @@ def test_simulator_receives_a_normal_tensor_outside_inference_mode():
         torch.zeros(1, 2, 3, 4, 4),
     )
     policy.eval(DummyTask(), {})
+
+
+def test_temporal_aggregation_combines_overlapping_action_chunks():
+    class DummyModel:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, qpos, cameras, tactile):
+            self.calls += 1
+            return torch.full((1, 3, 8), float(2 * self.calls - 1))
+
+    class DummyTask:
+        device = torch.device("cpu")
+
+        def __init__(self):
+            self.actions = []
+
+        def take_action(self, action, action_type):
+            self.actions.append(action.clone())
+
+    policy = Policy.__new__(Policy)
+    policy.model = DummyModel()
+    policy.action_step = 0
+    policy.temporal_agg = True
+    policy.temporal_agg_k = 0.01
+    policy.action_history = []
+    policy.timestep = 0
+    policy.device = torch.device("cpu")
+    policy.normalized_action_clip = 5.0
+    policy.joint_mean = torch.zeros(8)
+    policy.joint_std = torch.ones(8)
+    policy.action_mean = torch.zeros(8)
+    policy.action_std = torch.ones(8)
+    policy.encode_obs = lambda observation: (
+        torch.zeros(1, 8),
+        torch.zeros(1, 1, 3, 4, 4),
+        torch.zeros(1, 2, 3, 4, 4),
+    )
+    task = DummyTask()
+    policy.eval(task, {})
+    policy.eval(task, {})
+    expected = (1.0 + 3.0 * torch.exp(torch.tensor(-0.01))) / (
+        1.0 + torch.exp(torch.tensor(-0.01))
+    )
+    assert task.actions[0][0].item() == 1.0
+    assert torch.allclose(task.actions[1][0], expected)
+    policy.reset()
+    assert policy.timestep == 0
+    assert policy.action_history == []

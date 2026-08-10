@@ -25,6 +25,7 @@ from dataloader import (
     discover_episode_files,
     infer_grasp_classify_label,
     split_episode_files,
+    split_episode_files_univtac,
 )
 from training_utils import append_epoch_metrics, build_run_config, write_run_config
 
@@ -52,6 +53,16 @@ def find_free_port():
         return sock.getsockname()[1]
 
 
+def shutdown_dataloader_workers(loader):
+    """Close persistent workers before tearing down the distributed process."""
+    if loader is None:
+        return
+    iterator = getattr(loader, '_iterator', None)
+    if iterator is not None:
+        iterator._shutdown_workers()
+        loader._iterator = None
+
+
 class MultiGPUVTLATrainer:
     """多卡VTLA训练器"""
 
@@ -65,6 +76,9 @@ class MultiGPUVTLATrainer:
         self.dataset_stats = None
         self.run_config = None
         self.best_validation_loss = float('inf')
+        self.global_step = 0
+        self.training_examples_seen = 0
+        self.tactile_initialization = None
         self.autocast_dtype = (
             torch.bfloat16 if args.amp_dtype == 'bfloat16' else None
         )
@@ -81,16 +95,26 @@ class MultiGPUVTLATrainer:
         else:
             self.model = VTLAPolicy(args, stage=args.stage)
             self.model.to(self.device)
+            if args.tactile_backbone_ckpt and rank == 0:
+                self.tactile_initialization = (
+                    self.model.model.tactile_encoder.load_univtac_resnet_checkpoint(
+                        args.tactile_backbone_ckpt
+                    )
+                )
+                print(f"Loaded UniVTAC tactile trunk: {self.tactile_initialization}")
 
         # 包装为DDP
         self.model = DDP(self.model, device_ids=[rank], find_unused_parameters=False)
 
         # 优化器（仅在主进程打印）
         self.optimizer = self._build_optimizer()
-        self.scheduler = torch.optim.lr_scheduler.StepLR(
-            self.optimizer,
-            step_size=args.lr_decay_step,
-            gamma=args.lr_decay_gamma
+        self.scheduler = (
+            torch.optim.lr_scheduler.StepLR(
+                self.optimizer,
+                step_size=args.lr_decay_step,
+                gamma=args.lr_decay_gamma,
+            )
+            if args.lr_scheduler == 'step' else None
         )
 
         if self.is_main:
@@ -179,7 +203,8 @@ class MultiGPUVTLATrainer:
                 # 反向传播
                 self.optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.grad_clip)
+                if self.args.grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.grad_clip)
                 self.optimizer.step()
 
                 # 记录损失
@@ -198,7 +223,8 @@ class MultiGPUVTLATrainer:
                 if (epoch + 1) % self.args.save_freq == 0 or epoch + 1 == num_epochs:
                     self.save_checkpoint(epoch, epoch_losses, stage='stage1')
 
-            self.scheduler.step()
+            if self.scheduler is not None:
+                self.scheduler.step()
 
         if self.is_main:
             print("Stage 1 training completed!")
@@ -243,7 +269,11 @@ class MultiGPUVTLATrainer:
         if self.args.stage1_ckpt:
             self.load_tactile_encoder(self.args.stage1_ckpt)
 
+        final_epoch = -1
+        final_losses = None
+        final_validation_losses = None
         for epoch in range(num_epochs):
+            final_epoch = epoch
             self.model.train()
             train_loader.sampler.set_epoch(epoch)
             epoch_losses = defaultdict(list)
@@ -254,6 +284,8 @@ class MultiGPUVTLATrainer:
                 pbar = train_loader
 
             for batch in pbar:
+                if self.args.max_steps and self.global_step >= self.args.max_steps:
+                    break
                 qpos = batch['qpos'].to(self.device)
                 cam_image = batch['cam_image'].to(self.device)
                 tac_image = batch['tac_image'].to(self.device)
@@ -271,20 +303,40 @@ class MultiGPUVTLATrainer:
                 # 反向传播
                 self.optimizer.zero_grad()
                 loss_dict['loss'].backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.grad_clip)
+                if self.args.grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.grad_clip)
                 self.optimizer.step()
+                self.global_step += 1
+                self.training_examples_seen += qpos.shape[0] * self.world_size
 
                 # 记录损失
                 for k, v in loss_dict.items():
                     epoch_losses[k].append(v.item())
 
                 if self.is_main and isinstance(pbar, tqdm):
-                    pbar.set_postfix({k: f"{np.mean(v):.4f}" for k, v in epoch_losses.items()})
+                    postfix = {k: f"{np.mean(v):.4f}" for k, v in epoch_losses.items()}
+                    postfix['step'] = self.global_step
+                    pbar.set_postfix(postfix)
+
+                if (
+                    self.args.checkpoint_freq_steps > 0
+                    and self.global_step % self.args.checkpoint_freq_steps == 0
+                ):
+                    self.save_checkpoint(
+                        epoch,
+                        epoch_losses,
+                        stage='stage2',
+                        filename=f'stage2_step_{self.global_step}.ckpt',
+                    )
 
             epoch_losses = self.reduce_epoch_losses(epoch_losses)
             should_validate = (
                 val_loader is not None
-                and ((epoch + 1) % self.args.val_freq == 0 or epoch + 1 == num_epochs)
+                and (
+                    (epoch + 1) % self.args.val_freq == 0
+                    or epoch + 1 == num_epochs
+                    or (self.args.max_steps and self.global_step >= self.args.max_steps)
+                )
             )
             validation_losses = self.validate_policy(val_loader) if should_validate else None
             peak_memory = self.reduce_peak_memory()
@@ -292,9 +344,18 @@ class MultiGPUVTLATrainer:
                 epoch_losses['peak_gpu_memory_gib'] = [peak_memory]
                 print(f"Peak GPU memory: {peak_memory:.2f} GiB")
                 append_epoch_metrics(
-                    self.args.run_dir, 'stage2', epoch, epoch_losses, validation_losses
+                    self.args.run_dir,
+                    'stage2',
+                    epoch,
+                    epoch_losses,
+                    validation_losses,
+                    optimizer_step=self.global_step,
+                    training_examples_seen=self.training_examples_seen,
                 )
-                if (epoch + 1) % self.args.save_freq == 0 or epoch + 1 == num_epochs:
+                if (
+                    not self.args.max_steps
+                    and ((epoch + 1) % self.args.save_freq == 0 or epoch + 1 == num_epochs)
+                ):
                     self.save_checkpoint(
                         epoch, epoch_losses, stage='stage2',
                         validation_losses=validation_losses,
@@ -312,9 +373,39 @@ class MultiGPUVTLATrainer:
                             validation_losses=validation_losses,
                         )
 
-            self.scheduler.step()
+            final_losses = epoch_losses
+            final_validation_losses = validation_losses
+            if self.scheduler is not None:
+                self.scheduler.step()
+            if self.args.max_steps and self.global_step >= self.args.max_steps:
+                break
+
+        if self.args.max_steps and self.global_step != self.args.max_steps:
+            raise RuntimeError(
+                f"Stopped after {self.global_step} optimizer steps; target was "
+                f"{self.args.max_steps}. Increase --num_epochs."
+            )
 
         if self.is_main:
+            self.run_config['outcome'] = {
+                'optimizer_steps_completed': self.global_step,
+                'training_examples_seen': self.training_examples_seen,
+                'epochs_completed': final_epoch + 1,
+                'best_validation_loss': (
+                    self.best_validation_loss
+                    if self.best_validation_loss < float('inf') else None
+                ),
+            }
+            write_run_config(self.args.run_dir, self.run_config)
+            if self.args.save_final_checkpoint:
+                self.save_checkpoint(
+                    final_epoch,
+                    final_losses or {},
+                    stage='stage2',
+                    filename='stage2_last.ckpt',
+                    validation_losses=final_validation_losses,
+                )
+
             print("Stage 2 training completed!")
 
     def train_stage3(self, train_loader, num_epochs, val_loader=None):
@@ -354,10 +445,11 @@ class MultiGPUVTLATrainer:
                 # 反向传播
                 self.optimizer.zero_grad()
                 loss_dict['loss'].backward()
-                torch.nn.utils.clip_grad_norm_(
-                    filter(lambda p: p.requires_grad, self.model.parameters()),
-                    self.args.grad_clip
-                )
+                if self.args.grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        filter(lambda p: p.requires_grad, self.model.parameters()),
+                        self.args.grad_clip
+                    )
                 self.optimizer.step()
 
                 # 记录损失
@@ -398,7 +490,8 @@ class MultiGPUVTLATrainer:
                             validation_losses=validation_losses,
                         )
 
-            self.scheduler.step()
+            if self.scheduler is not None:
+                self.scheduler.step()
 
         if self.is_main:
             print("Stage 3 training completed!")
@@ -420,9 +513,11 @@ class MultiGPUVTLATrainer:
         )
         checkpoint = {
             'epoch': epoch,
+            'optimizer_step': self.global_step,
+            'training_examples_seen': self.training_examples_seen,
             'model_state_dict': self.model.module.state_dict(),  # 注意：DDP需要用module
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
             'losses': {k: np.mean(v) for k, v in losses.items()},
             'validation_losses': (
                 {k: np.mean(v) for k, v in validation_losses.items()}
@@ -489,9 +584,11 @@ class MultiGPUVTLATrainer:
 def main_worker(rank, world_size, args):
     """每个GPU进程的主函数"""
     setup_ddp(rank, world_size, args)
+    train_loader = None
+    val_loader = None
     try:
         # Only rank 0 reads pretrained weights; DDP broadcasts them at construction.
-        args.pretrained_backbones = (rank == 0)
+        args.pretrained_backbones = (rank == 0 and not args.tactile_backbone_ckpt)
         torch.manual_seed(args.seed + rank)
         np.random.seed(args.seed + rank)
 
@@ -506,16 +603,46 @@ def main_worker(rank, world_size, args):
             all_episode_files = dataset.episode_files
             train_episode_files = dataset.episode_files
             val_episode_files = []
+            selected_episode_files = dataset.episode_files
+            available_episode_files = dataset.episode_files
+            episode_labels = {}
         else:
-            all_episode_files = discover_episode_files(args.dataset_dir)
-            episode_labels = {
-                path: infer_grasp_classify_label(path) for path in all_episode_files
-            }
-            train_episode_files, val_episode_files = split_episode_files(
-                all_episode_files,
-                args.val_fraction,
-                args.val_seed,
-                strata=episode_labels,
+            available_episode_files = discover_episode_files(args.dataset_dir)
+            if args.episode_limit < 0:
+                raise ValueError(f"episode_limit must be non-negative, got {args.episode_limit}")
+            if args.episode_limit and len(available_episode_files) < args.episode_limit:
+                raise ValueError(
+                    f"Requested the first {args.episode_limit} episodes, but only "
+                    f"{len(available_episode_files)} are available in {args.dataset_dir}"
+                )
+            selected_episode_files = (
+                available_episode_files[:args.episode_limit]
+                if args.episode_limit else available_episode_files
+            )
+            episode_labels = {}
+            if args.split_strategy == 'official_univtac':
+                train_episode_files, val_episode_files = split_episode_files_univtac(
+                    selected_episode_files,
+                    args.val_fraction,
+                    args.val_seed,
+                )
+            else:
+                strata = None
+                if args.split_strategy == 'stratified_grasp':
+                    episode_labels = {
+                        path: infer_grasp_classify_label(path)
+                        for path in selected_episode_files
+                    }
+                    strata = episode_labels
+                train_episode_files, val_episode_files = split_episode_files(
+                    selected_episode_files,
+                    args.val_fraction,
+                    args.val_seed,
+                    strata=strata,
+                )
+            normalization_episode_files = (
+                selected_episode_files
+                if args.normalization_scope == 'selected' else train_episode_files
             )
             dataset = VTLADataset(
                 args.dataset_dir,
@@ -525,6 +652,8 @@ def main_worker(rank, world_size, args):
                 state_dim=args.state_dim,
                 joint_indices=args.joint_indices,
                 episode_files=train_episode_files,
+                normalization_episode_files=normalization_episode_files,
+                normalize_tactile=args.normalize_tactile,
                 verbose=(rank == 0),
             )
             dataset_stats = dataset.get_stats()
@@ -538,6 +667,7 @@ def main_worker(rank, world_size, args):
                     joint_indices=args.joint_indices,
                     episode_files=val_episode_files,
                     normalization_stats=dataset_stats,
+                    normalize_tactile=args.normalize_tactile,
                     verbose=(rank == 0),
                 )
                 if val_episode_files else None
@@ -598,11 +728,14 @@ def main_worker(rank, world_size, args):
                 'trainable_parameters': sum(
                     p.numel() for p in trainer.model.parameters() if p.requires_grad
                 ),
+                'tactile_initialization': trainer.tactile_initialization,
             }
             dataset_root = os.path.abspath(args.dataset_dir)
             trainer.run_config['dataset'] = {
                 'root': dataset_root,
-                'episode_count': len(all_episode_files),
+                'available_episode_count': len(available_episode_files),
+                'episode_count': len(selected_episode_files),
+                'selected_episodes': [path.name for path in selected_episode_files],
                 'train_episode_count': len(train_episode_files),
                 'validation_episode_count': len(val_episode_files),
                 'train_episodes': [path.name for path in train_episode_files],
@@ -610,7 +743,9 @@ def main_worker(rank, world_size, args):
                 'train_sample_count': len(dataset),
                 'validation_sample_count': len(val_dataset) if val_dataset is not None else 0,
                 'split_seed': args.val_seed,
+                'split_strategy': args.split_strategy,
                 'validation_fraction': args.val_fraction,
+                'normalization_scope': args.normalization_scope,
                 'class_counts': {
                     label: sum(value == label for value in episode_labels.values())
                     for label in sorted(set(episode_labels.values()))
@@ -624,6 +759,34 @@ def main_worker(rank, world_size, args):
                     for label in sorted(set(episode_labels.values()))
                 },
             }
+            if args.experiment_profile == 'univtac_paper_aligned_v1':
+                full_loader_cycles, remaining_steps = divmod(
+                    args.max_steps, len(train_loader)
+                )
+                expected_examples_per_rank = (
+                    full_loader_cycles * sampler.num_samples
+                    + min(remaining_steps * args.batch_size, sampler.num_samples)
+                )
+                expected_training_examples = expected_examples_per_rank * world_size
+                trainer.run_config['comparison_protocol'] = {
+                    'name': args.experiment_profile,
+                    'paper': 'https://arxiv.org/abs/2602.10093',
+                    'official_code': 'https://github.com/univtac/UniVTAC',
+                    'paper_training_episodes_per_task': 50,
+                    'paper_optimizer_steps': 4000,
+                    'paper_batch_size': 64,
+                    'nominal_training_examples': 4000 * 64,
+                    'expected_actual_training_examples': expected_training_examples,
+                    'selected_training_samples_per_pass': len(dataset),
+                    'expected_equivalent_training_passes': (
+                        expected_training_examples / len(dataset)
+                    ),
+                    'notes': [
+                        'Episodes 0-49 are selected before the official seed-1 80/20 split.',
+                        'Normalization uses all 50 selected episodes, matching official ACT code.',
+                        'The paper specifies 4000 steps; this run fixes the official loop off-by-one and executes exactly 4000.',
+                    ],
+                }
             config_path = write_run_config(args.run_dir, trainer.run_config)
             print(f"Run configuration saved: {config_path}")
 
@@ -634,6 +797,8 @@ def main_worker(rank, world_size, args):
         elif args.stage == 'stage3':
             trainer.train_stage3(train_loader, args.num_epochs, val_loader)
     finally:
+        shutdown_dataloader_workers(train_loader)
+        shutdown_dataloader_workers(val_loader)
         cleanup_ddp()
 
 
@@ -657,6 +822,12 @@ def get_args():
     parser.add_argument('--dataset_dir', type=str, required=True)
     parser.add_argument('--dataset_manifest', type=str, default=None,
                        help='Path to the validated source-data manifest recorded in config.json')
+    parser.add_argument('--task_name', type=str, default=None,
+                       help='UniVTAC task name recorded with the run')
+    parser.add_argument('--experiment_profile', type=str, default=None,
+                       help='Named comparison protocol recorded with the run')
+    parser.add_argument('--episode_limit', type=int, default=0,
+                       help='Use the first N numerically sorted episodes; 0 uses all')
     parser.add_argument('--camera_names', nargs='+', default=['cam_high'])
     parser.add_argument('--tactile_names', nargs='+', default=['tac_left', 'tac_right'])
     parser.add_argument('--batch_size', type=int, default=8,
@@ -664,18 +835,35 @@ def get_args():
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--amp_dtype', choices=['float32', 'bfloat16'], default='float32',
                        help='CUDA autocast precision; bfloat16 is recommended on L40S')
+    parser.add_argument('--normalize_tactile', action=argparse.BooleanOptionalAction,
+                       default=True,
+                       help='Apply ImageNet normalization to tactile RGB inputs')
     parser.add_argument('--val_fraction', type=float, default=0.1,
                        help='Episode fraction held out for validation')
     parser.add_argument('--val_seed', type=int, default=20260809,
                        help='Deterministic episode split seed')
     parser.add_argument('--val_freq', type=int, default=5,
                        help='Run validation every N epochs')
+    parser.add_argument(
+        '--split_strategy',
+        choices=['random', 'stratified_grasp', 'official_univtac'],
+        default='random',
+        help='Episode-level train/validation split implementation',
+    )
+    parser.add_argument(
+        '--normalization_scope',
+        choices=['train', 'selected'],
+        default='train',
+        help='Episodes used for qpos/action normalization statistics',
+    )
 
     # 模型相关
     parser.add_argument('--state_dim', type=int, default=8)
     parser.add_argument('--joint_indices', nargs='+', type=int, default=None,
                        help='Raw UniVTAC joint columns used by the model; defaults to range(state_dim)')
     parser.add_argument('--chunk_size', type=int, default=100)
+    parser.add_argument('--temporal_agg', action=argparse.BooleanOptionalAction,
+                       default=False)
     parser.add_argument('--hidden_dim', type=int, default=512)
     parser.add_argument('--nheads', type=int, default=8)
     parser.add_argument('--enc_layers', type=int, default=4)
@@ -685,7 +873,20 @@ def get_args():
 
     # 触觉编码器
     parser.add_argument('--tactile_backbone', type=str, default='resnet34')
+    parser.add_argument('--tactile_backbone_ckpt', type=str, default=None,
+                       help='Official UniVTAC encoder checkpoint used to initialize the tactile trunk')
+    parser.add_argument(
+        '--freeze_tactile_batchnorm',
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help='Keep tactile ResNet BatchNorm statistics and affine parameters fixed',
+    )
     parser.add_argument('--tactile_latent_dim', type=int, default=512)
+    parser.add_argument(
+        '--tactile_position_embedding',
+        choices=['sine', 'learned'],
+        default='sine',
+    )
     parser.add_argument('--tactile_supervise', nargs='+', default=['marker', 'rgb'])
     parser.add_argument('--loss_weights', type=dict, default={'marker': 1.0, 'rgb': 0.5})
 
@@ -700,9 +901,16 @@ def get_args():
     parser.add_argument('--refine_weight', type=float, default=0.5)
     parser.add_argument('--contact_weight', type=float, default=0.1)
     parser.add_argument('--pad_weight', type=float, default=1.0)
+    parser.add_argument(
+        '--l1_reduction',
+        choices=['valid_mean', 'official_mean'],
+        default='valid_mean',
+    )
 
     # 训练超参数
     parser.add_argument('--num_epochs', type=int, default=1000)
+    parser.add_argument('--max_steps', type=int, default=0,
+                       help='Exact optimizer-step budget; 0 trains for num_epochs')
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--lr_stage1', type=float, default=1e-4)
     parser.add_argument('--lr_stage3', type=float, default=5e-5)
@@ -712,12 +920,20 @@ def get_args():
     parser.add_argument('--grad_clip', type=float, default=1.0)
     parser.add_argument('--lr_decay_step', type=int, default=200)
     parser.add_argument('--lr_decay_gamma', type=float, default=0.5)
+    parser.add_argument('--lr_scheduler', choices=['none', 'step'], default='step')
 
     # Checkpoint
     parser.add_argument('--ckpt_dir', type=str, required=True)
     parser.add_argument('--stage1_ckpt', type=str, default=None)
     parser.add_argument('--stage2_ckpt', type=str, default=None)
     parser.add_argument('--save_freq', type=int, default=50)
+    parser.add_argument('--checkpoint_freq_steps', type=int, default=0,
+                       help='Save a step checkpoint every N optimizer steps; 0 disables')
+    parser.add_argument(
+        '--save_final_checkpoint',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument('--run_dir', type=str, default=None,
                        help='Directory for config.json and metrics.jsonl')
 

@@ -27,8 +27,12 @@ TACTILE_KEYS = {
 }
 
 
-def _image_tensor(image: torch.Tensor, device: torch.device) -> torch.Tensor:
-    """Match the resize and ImageNet normalization used by VTLADataset."""
+def _image_tensor(
+    image: torch.Tensor,
+    device: torch.device,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Match the resize and optional normalization used by VTLADataset."""
     image = torch.as_tensor(image)
     if image.ndim == 4 and image.shape[0] == 1:
         image = image.squeeze(0)
@@ -42,9 +46,11 @@ def _image_tensor(image: torch.Tensor, device: torch.device) -> torch.Tensor:
         .to(device=device, dtype=torch.float32)
         / 255.0
     )
-    mean = image.new_tensor(IMAGENET_MEAN).view(3, 1, 1)
-    std = image.new_tensor(IMAGENET_STD).view(3, 1, 1)
-    return (image - mean) / std
+    if normalize:
+        mean = image.new_tensor(IMAGENET_MEAN).view(3, 1, 1)
+        std = image.new_tensor(IMAGENET_STD).view(3, 1, 1)
+        image = (image - mean) / std
+    return image
 
 
 def _resolve_tactile(observation: Mapping, name: str) -> torch.Tensor:
@@ -107,25 +113,47 @@ class Policy(BasePolicy):
         stats = checkpoint.get("dataset_stats") or run_config.get("dataset_stats")
         if not stats:
             raise KeyError("Checkpoint does not contain dataset normalization statistics")
-        self.joint_mean = torch.as_tensor(
-            stats["joint_mean"], dtype=torch.float32, device=self.device
+        self.qpos_mean = torch.as_tensor(
+            stats.get("qpos_mean", stats["joint_mean"]),
+            dtype=torch.float32,
+            device=self.device,
         )
-        self.joint_std = torch.as_tensor(
-            stats["joint_std"], dtype=torch.float32, device=self.device
+        self.qpos_std = torch.as_tensor(
+            stats.get("qpos_std", stats["joint_std"]),
+            dtype=torch.float32,
+            device=self.device,
         )
+        self.action_mean = torch.as_tensor(
+            stats.get("action_mean", stats["joint_mean"]),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self.action_std = torch.as_tensor(
+            stats.get("action_std", stats["joint_std"]),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self.joint_mean = self.qpos_mean
+        self.joint_std = self.qpos_std
         self.camera_names = list(training["camera_names"])
         self.tactile_names = list(training["tactile_names"])
+        self.normalize_tactile = bool(training.get("normalize_tactile", True))
         self.state_dim = int(training["state_dim"])
         self.joint_indices = [
             int(index) for index in stats.get("joint_indices", range(self.state_dim))
         ]
         self.action_step = int(args.get("action_step", 0))
+        self.temporal_agg = bool(args.get("temporal_agg", training.get("temporal_agg", False)))
+        self.temporal_agg_k = float(args.get("temporal_agg_k", 0.01))
+        self.action_history = []
+        self.timestep = 0
         self.normalized_action_clip = float(args.get("normalized_action_clip", 5.0))
         self.task_name = str(args.get("task_name", "unknown"))
 
-        if self.joint_mean.numel() != self.state_dim:
+        if self.qpos_mean.numel() != self.state_dim or self.action_mean.numel() != self.state_dim:
             raise ValueError(
-                f"Checkpoint stats have {self.joint_mean.numel()} dimensions, "
+                f"Checkpoint stats have qpos={self.qpos_mean.numel()} and "
+                f"action={self.action_mean.numel()} dimensions, "
                 f"but the model expects {self.state_dim}"
             )
         if len(self.joint_indices) != self.state_dim:
@@ -158,7 +186,9 @@ class Policy(BasePolicy):
                 f"but VTLA selects raw columns {self.joint_indices}"
             )
         qpos = qpos[self.joint_indices]
-        qpos = ((qpos - self.joint_mean) / self.joint_std).unsqueeze(0)
+        qpos_mean = getattr(self, 'qpos_mean', self.joint_mean)
+        qpos_std = getattr(self, 'qpos_std', self.joint_std)
+        qpos = ((qpos - qpos_mean) / qpos_std).unsqueeze(0)
 
         camera_images = [
             _image_tensor(
@@ -167,7 +197,11 @@ class Policy(BasePolicy):
             for name in self.camera_names
         ]
         tactile_images = [
-            _image_tensor(_resolve_tactile(observation, name), self.device)
+            _image_tensor(
+                _resolve_tactile(observation, name),
+                self.device,
+                normalize=bool(getattr(self, 'normalize_tactile', True)),
+            )
             for name in self.tactile_names
         ]
         return qpos, torch.stack(camera_images).unsqueeze(0), torch.stack(tactile_images).unsqueeze(0)
@@ -179,11 +213,33 @@ class Policy(BasePolicy):
         with torch.inference_mode():
             qpos, camera_images, tactile_images = self.encode_obs(observation)
             normalized_actions = self.model(qpos, camera_images, tactile_images)
-            normalized_action = normalized_actions[0, self.action_step]
+            if getattr(self, 'temporal_agg', False):
+                self.action_history.append((self.timestep, normalized_actions[0]))
+                current_predictions = [
+                    chunk[self.timestep - query_t]
+                    for query_t, chunk in self.action_history
+                    if 0 <= self.timestep - query_t < chunk.shape[0]
+                ]
+                stacked = torch.stack(current_predictions)
+                weights = torch.exp(
+                    -self.temporal_agg_k
+                    * torch.arange(stacked.shape[0], device=self.device, dtype=stacked.dtype)
+                )
+                weights = weights / weights.sum()
+                normalized_action = (stacked * weights.unsqueeze(1)).sum(0)
+                self.action_history = [
+                    (query_t, chunk)
+                    for query_t, chunk in self.action_history
+                    if self.timestep - query_t + 1 < chunk.shape[0]
+                ]
+            else:
+                normalized_action = normalized_actions[0, self.action_step]
             normalized_action = normalized_action.clamp(
                 -self.normalized_action_clip, self.normalized_action_clip
             )
-            action = normalized_action * self.joint_std + self.joint_mean
+            action_std = getattr(self, 'action_std', self.joint_std)
+            action_mean = getattr(self, 'action_mean', self.joint_mean)
+            action = normalized_action * action_std + action_mean
 
         # clone() outside inference mode produces a normal tensor for IsaacLab.
         action = action.clone()
@@ -193,8 +249,9 @@ class Policy(BasePolicy):
         action = _to_univtac_qpos(action)
         action[-1] = action[-1].clamp(0.0, 0.039)
         task.take_action(action.to(task.device), action_type="qpos")
+        self.timestep = getattr(self, 'timestep', 0) + 1
 
     def reset(self):
-        # This adapter re-plans from the latest observation every step and has
-        # no temporal buffer to reset.
+        self.action_history = []
+        self.timestep = 0
         return None

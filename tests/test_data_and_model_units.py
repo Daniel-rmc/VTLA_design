@@ -12,6 +12,7 @@ from dataloader import (
     discover_episode_files,
     infer_grasp_classify_label,
     split_episode_files,
+    split_episode_files_univtac,
 )
 from models.action_heads import DualPathActionHead
 from models.vtla_policy import get_2d_sinusoid_encoding
@@ -121,6 +122,42 @@ class DatasetTests(unittest.TestCase):
             self.assertEqual(len(train_a), 8)
             self.assertEqual(len(val_a), 2)
             self.assertFalse(set(train_a) & set(val_a))
+
+    def test_univtac_split_matches_legacy_numpy_permutation(self):
+        files = [Path(f'{episode_id}.hdf5') for episode_id in range(50)]
+        train, val = split_episode_files_univtac(files, 0.2, 1)
+        expected = np.random.RandomState(1).permutation(50)
+        self.assertEqual([int(path.stem) for path in train], expected[:40].tolist())
+        self.assertEqual([int(path.stem) for path in val], expected[40:].tolist())
+
+    def test_qpos_and_action_stats_use_shifted_pairs_from_all_selected_episodes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_official_episode(root, 0)
+            _write_official_episode(root, 10)
+            files = discover_episode_files(root)
+            dataset = VTLADataset(
+                directory,
+                ['cam_high'],
+                ['tac_left', 'tac_right'],
+                chunk_size=2,
+                state_dim=8,
+                joint_indices=range(8),
+                episode_files=files[:1],
+                normalization_episode_files=files,
+                verbose=False,
+            )
+            qpos = []
+            actions = []
+            for path in files:
+                with h5py.File(path, 'r') as stream:
+                    joints = stream['embodiment/joint'][:, :8]
+                    qpos.append(joints[:-1])
+                    actions.append(joints[1:])
+            stats = dataset.get_stats()
+            np.testing.assert_allclose(stats['qpos_mean'], np.concatenate(qpos).mean(0))
+            np.testing.assert_allclose(stats['action_mean'], np.concatenate(actions).mean(0))
+            self.assertFalse(np.array_equal(stats['qpos_mean'], stats['action_mean']))
 
     def test_offline_eval_reuses_checkpoint_validation_episode_names(self):
         with tempfile.TemporaryDirectory() as directory:

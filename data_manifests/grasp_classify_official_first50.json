@@ -1,0 +1,536 @@
+{
+  "created_at_utc": "2026-08-10T06:11:55.691946+00:00",
+  "source": "huggingface://datasets/byml/UniVTAC/grasp_classify/clean",
+  "task_name": "grasp_classify",
+  "dataset_dir": "/home/rmc/workspace/UniVTAC/data/official/grasp_classify/clean",
+  "available_episode_count": 100,
+  "episode_count": 50,
+  "selection": "first 50 numerically sorted episodes",
+  "camera_names": [
+    "cam_high"
+  ],
+  "training_sample_count": 2653,
+  "raw_joint_dim": 9,
+  "model_joint_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "control_layout": "7 arm joints + 1 gripper command",
+  "metadata_sha256": "2d46a53d733a424916173c066b7bb4de3eb7df14074338a1de94df15c7932c33",
+  "total_hdf5_bytes": 2139829635,
+  "episodes": [
+    {
+      "episode": "0.hdf5",
+      "bytes": 44635690,
+      "sha256": "d5e87530acbca57325ef637cf5e0efed0f3026acab59981df6d2f807352333f7",
+      "frames": 57,
+      "training_samples": 56,
+      "seed": 0,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "1.hdf5",
+      "bytes": 44319915,
+      "sha256": "923f0be0e05e82a6e818630f79e74c503e83d437ceeebba4ea032683c65331f2",
+      "frames": 55,
+      "training_samples": 54,
+      "seed": 1,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "2.hdf5",
+      "bytes": 40859328,
+      "sha256": "78679e69c9aa1f61b44fb9d74ab4aa763e488d9462a9141613aab9634b0ff8a5",
+      "frames": 52,
+      "training_samples": 51,
+      "seed": 2,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "3.hdf5",
+      "bytes": 42378208,
+      "sha256": "4a420ddd8364160a557cf9ad703c412495fabf13c27bf72eb2368112a7273489",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 3,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "4.hdf5",
+      "bytes": 40841388,
+      "sha256": "aef6696bec432d074327d06794aa0dd501177caf3379c3b88b858057f9170e84",
+      "frames": 52,
+      "training_samples": 51,
+      "seed": 4,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "5.hdf5",
+      "bytes": 42434746,
+      "sha256": "b2a44648577c16fcae18af3b70f856d666c669bbf2f652318ff41cc23f43d0d1",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 5,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "6.hdf5",
+      "bytes": 43399132,
+      "sha256": "0b584564ccc89c2d87410ddb3e8cc68f2bb1ce963bc145bde189bfdeb7d29635",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 6,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "7.hdf5",
+      "bytes": 40854960,
+      "sha256": "8b26112397ec1a722a84a753318ff03ecefa3268e8ed3e9bcdb2da4162c3b09a",
+      "frames": 52,
+      "training_samples": 51,
+      "seed": 7,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "8.hdf5",
+      "bytes": 42424000,
+      "sha256": "83b30d7251a75c6b0a5f0108cf0a2ac46cf2ca22cca1cad8e00fe8eb6c3a12c0",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 8,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "9.hdf5",
+      "bytes": 42482513,
+      "sha256": "c9b29755663f81ff2b973685b4ddc0123e146fb08fb0f220ef3cbd01cd0a61ea",
+      "frames": 53,
+      "training_samples": 52,
+      "seed": 9,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "10.hdf5",
+      "bytes": 42394138,
+      "sha256": "aaf3f75d64562ac3b872ee52c487b5fdb2818d1fc36ec074f97b4e2e1b7233a1",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 10,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "11.hdf5",
+      "bytes": 44113940,
+      "sha256": "96fd5c544e75331dd202653807f7650be97c48040211af2e9d8e1c93648d185f",
+      "frames": 55,
+      "training_samples": 54,
+      "seed": 11,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "12.hdf5",
+      "bytes": 43146930,
+      "sha256": "5b884d89911caaba2bc2da40e156300971701f16cc0b53291af77ac4b5b2c030",
+      "frames": 55,
+      "training_samples": 54,
+      "seed": 12,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "13.hdf5",
+      "bytes": 43233775,
+      "sha256": "e140d56a5e6e711926c126ae335e613ee554999ad339bfe4f1de4b5b5b5d7cc5",
+      "frames": 55,
+      "training_samples": 54,
+      "seed": 13,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "14.hdf5",
+      "bytes": 41639120,
+      "sha256": "d80dfcaf063dfd620b0a0e55ae4e4d22e32156e823b2cbea21af44cdfec014ec",
+      "frames": 52,
+      "training_samples": 51,
+      "seed": 14,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "15.hdf5",
+      "bytes": 39230650,
+      "sha256": "e789d7dc69e13ae66a09a98122181b25afb164440f727582d2b647867a5838e2",
+      "frames": 50,
+      "training_samples": 49,
+      "seed": 15,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "16.hdf5",
+      "bytes": 41527453,
+      "sha256": "53bc6825a9b2c7ce95e6e69ad842f684946f2dfec526e8cb089316d4fe383e2b",
+      "frames": 53,
+      "training_samples": 52,
+      "seed": 16,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "17.hdf5",
+      "bytes": 43196485,
+      "sha256": "d550c7957542228e3965f976fbd57635a9da5db4f88c2abf566798b630666ec4",
+      "frames": 55,
+      "training_samples": 54,
+      "seed": 17,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "18.hdf5",
+      "bytes": 42409636,
+      "sha256": "4d0ccd22eed1c8278eaa1911e10fb721820cdff83e807c7efc3c551c0a4a5e57",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 18,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "19.hdf5",
+      "bytes": 43981832,
+      "sha256": "a526a658987e0eee959b2c5cd91bc6c60150e8e0f2893cb6e72fc13774779f4e",
+      "frames": 56,
+      "training_samples": 55,
+      "seed": 19,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "20.hdf5",
+      "bytes": 43139065,
+      "sha256": "f4bb9a641df203f94ab43bc5c6a94747642bfa37413aa1e9501c9ec86969d9bb",
+      "frames": 55,
+      "training_samples": 54,
+      "seed": 20,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "21.hdf5",
+      "bytes": 44835944,
+      "sha256": "e0f7c7d651419cbbbf113a884d38dcb4b766c09612e4697770b23e36c21665ee",
+      "frames": 56,
+      "training_samples": 55,
+      "seed": 21,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "22.hdf5",
+      "bytes": 42333928,
+      "sha256": "ba560c2359b745a441b9f13a935bd365679eb8227ac60c1ea2ad58d32283b619",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 22,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "23.hdf5",
+      "bytes": 43530190,
+      "sha256": "906fda34da80c2e5c1e75bdc1a9512698d878035c3a32282d23174ba4f8bba32",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 23,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "24.hdf5",
+      "bytes": 43304848,
+      "sha256": "70013644812cafea0c045d9963290cb30c7e0e3e2b1d53bc6ae228cf31d7b50f",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 24,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "25.hdf5",
+      "bytes": 44723185,
+      "sha256": "17fe99bef9f296fcb803301597b38b6e527a28a1ed88f64f189eaa8eda19d54d",
+      "frames": 57,
+      "training_samples": 56,
+      "seed": 25,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "26.hdf5",
+      "bytes": 41522100,
+      "sha256": "c02fb1524048aeecdf805ebed04c03995558bdb2b4a217aaec2ebd3a251db4cb",
+      "frames": 53,
+      "training_samples": 52,
+      "seed": 26,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "27.hdf5",
+      "bytes": 44317055,
+      "sha256": "26102f93d18897a8b3187aa68b5dc7d0ac85c6510b1dc72903a7a2452993034c",
+      "frames": 55,
+      "training_samples": 54,
+      "seed": 27,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "28.hdf5",
+      "bytes": 43989840,
+      "sha256": "0a24d879058e0f8893839fd1379f6f07132979ff7e74d05ad107cf57eba1d081",
+      "frames": 56,
+      "training_samples": 55,
+      "seed": 28,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "29.hdf5",
+      "bytes": 41618136,
+      "sha256": "ff8b5618a8071234fc317c9f5d1cf6be756c12acf27313b029384814a32d6cd1",
+      "frames": 53,
+      "training_samples": 52,
+      "seed": 29,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "30.hdf5",
+      "bytes": 44345820,
+      "sha256": "a5f2710a40f82514e90fed8bb3faf356db3abb0f265cf4508cf4046ec05bba33",
+      "frames": 55,
+      "training_samples": 54,
+      "seed": 30,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "31.hdf5",
+      "bytes": 43202480,
+      "sha256": "be3668ea33b5d7ac9136a9d1c5c663cce9a1cf5cc866944375416428f7b2faac",
+      "frames": 55,
+      "training_samples": 54,
+      "seed": 31,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "32.hdf5",
+      "bytes": 40849448,
+      "sha256": "826fe2410672d05e1ab0789d2dfa4e21960ce54c121bb003358f51910eaac23c",
+      "frames": 52,
+      "training_samples": 51,
+      "seed": 32,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "33.hdf5",
+      "bytes": 40829740,
+      "sha256": "5b737648bf4bbb1b4c2b954fe1ca7c8dcbb1808f19e16d9b41d5dafa32be07aa",
+      "frames": 52,
+      "training_samples": 51,
+      "seed": 33,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "34.hdf5",
+      "bytes": 45059552,
+      "sha256": "3ef80b33ec3f6dda57fec4c5b262552974b1c9f199175e833344ff428f675d46",
+      "frames": 56,
+      "training_samples": 55,
+      "seed": 34,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "35.hdf5",
+      "bytes": 43008388,
+      "sha256": "9312904228dccb747fca6e107683fed59b857a2436c6420d1039a35c71caa994",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 35,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "36.hdf5",
+      "bytes": 44635184,
+      "sha256": "2d63b2bf032a5a0b38345825479baa79c36a011a0c58e2c86c44a210540c4328",
+      "frames": 56,
+      "training_samples": 55,
+      "seed": 36,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "37.hdf5",
+      "bytes": 45164664,
+      "sha256": "2c7b7b8d5e802cd7d054dd1e0c75ca0fc8d86f17aa386587f83a2f02e9ced3bf",
+      "frames": 56,
+      "training_samples": 55,
+      "seed": 37,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "38.hdf5",
+      "bytes": 43220608,
+      "sha256": "ef6823e55d3bec6ceaf493835e3d080360b95939cbcb8ebb20b4af13a5c1d8e3",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 38,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "39.hdf5",
+      "bytes": 43140165,
+      "sha256": "cee817c554c63be7b69d928c0916b24893c5cf0dd9000a8a3b4de80c0ba12a4a",
+      "frames": 55,
+      "training_samples": 54,
+      "seed": 39,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "40.hdf5",
+      "bytes": 44022488,
+      "sha256": "7a3987dad6a31af946641c29cdc1f1fa7cc80dbeb4d7d52cf52af2d4e6cc7e8a",
+      "frames": 56,
+      "training_samples": 55,
+      "seed": 40,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "41.hdf5",
+      "bytes": 42366382,
+      "sha256": "d9f407acf177817376e3f2e5fb57354a3f8e4d237305399a51e1c95110fad86d",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 41,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "42.hdf5",
+      "bytes": 42325951,
+      "sha256": "c1a3bb4a4e8f249dd13d43deadfe31d1b5dce701208f091594441ed05736b8b4",
+      "frames": 53,
+      "training_samples": 52,
+      "seed": 42,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "43.hdf5",
+      "bytes": 42317296,
+      "sha256": "26a1601ac9bd265516bfa054e0efa7fa18178dc1b930daf65dc767ea6b991fd7",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 43,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "44.hdf5",
+      "bytes": 43227010,
+      "sha256": "af8ccdb9cc798e382ae4fd98de7a41afa3544bdd5efee979628b477ded1f6d88",
+      "frames": 55,
+      "training_samples": 54,
+      "seed": 44,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "45.hdf5",
+      "bytes": 40023373,
+      "sha256": "6ff7e46115a00c973402b621b96f2c065760931d7fabb3c37c95d7bec8aaedee",
+      "frames": 51,
+      "training_samples": 50,
+      "seed": 45,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "46.hdf5",
+      "bytes": 43937200,
+      "sha256": "0a4908b46666baf5c545df7329eb9b9321cb9b19988bc1046a118f5c5236343c",
+      "frames": 56,
+      "training_samples": 55,
+      "seed": 46,
+      "result": "success",
+      "class_label": "plain"
+    },
+    {
+      "episode": "47.hdf5",
+      "bytes": 43377532,
+      "sha256": "ebe2a3dab60683a8e60d7f6cde13300c9251373164475cb05894cdd248185c77",
+      "frames": 54,
+      "training_samples": 53,
+      "seed": 47,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "48.hdf5",
+      "bytes": 41764024,
+      "sha256": "182f92907c493e8eef7961a40cf92338e7b2a4a0b5ce10ff5fe93b1b9e2737eb",
+      "frames": 52,
+      "training_samples": 51,
+      "seed": 48,
+      "result": "success",
+      "class_label": "rough"
+    },
+    {
+      "episode": "49.hdf5",
+      "bytes": 40194200,
+      "sha256": "9aae502d9897cd9198adc66039df70e93fbfebe9993a83add5b75f60d4515691",
+      "frames": 50,
+      "training_samples": 49,
+      "seed": 49,
+      "result": "success",
+      "class_label": "rough"
+    }
+  ],
+  "result_counts": {
+    "success": 50
+  },
+  "class_counts": {
+    "plain": 31,
+    "rough": 19
+  }
+}

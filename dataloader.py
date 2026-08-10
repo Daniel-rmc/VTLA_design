@@ -137,6 +137,35 @@ def split_episode_files(
     return train_files, val_files
 
 
+def split_episode_files_univtac(
+    episode_files: Sequence[Path],
+    val_fraction: float = 0.2,
+    seed: int = 1,
+) -> tuple[list[Path], list[Path]]:
+    """Reproduce the episode split in UniVTAC ``policy/ACT/utils.py``.
+
+    The official implementation seeds NumPy's legacy RNG, permutes episode IDs,
+    and uses the leading 80% for training.  Keeping this separate from the
+    modern, optionally stratified splitter avoids silently changing historical
+    experiments that already use :func:`split_episode_files`.
+    """
+    files = list(episode_files)
+    if not 0.0 <= val_fraction < 1.0:
+        raise ValueError(f"val_fraction must be in [0, 1), got {val_fraction}")
+    if val_fraction == 0.0:
+        return files, []
+    if len(files) < 2:
+        raise ValueError("At least two episodes are required for a validation split")
+
+    permutation = np.random.RandomState(seed).permutation(len(files))
+    train_count = int((1.0 - val_fraction) * len(files))
+    train_count = min(max(train_count, 1), len(files) - 1)
+    return (
+        [files[int(index)] for index in permutation[:train_count]],
+        [files[int(index)] for index in permutation[train_count:]],
+    )
+
+
 def infer_grasp_classify_label(episode_path: str | Path) -> str:
     """Identify which prism was active from the first recorded actor poses."""
     path = Path(episode_path)
@@ -170,8 +199,10 @@ class VTLADataset(Dataset):
         state_dim: Optional[int] = None,
         joint_indices: Optional[Iterable[int]] = None,
         episode_files: Optional[Sequence[str | Path]] = None,
+        normalization_episode_files: Optional[Sequence[str | Path]] = None,
         normalization_stats: Optional[Mapping[str, object]] = None,
         normalize_joints: bool = True,
+        normalize_tactile: bool = True,
         verbose: bool = True,
     ):
         self.dataset_dir = Path(dataset_dir)
@@ -180,6 +211,7 @@ class VTLADataset(Dataset):
         self.chunk_size = chunk_size
         self.state_dim = state_dim
         self.normalize_joints = normalize_joints
+        self.normalize_tactile = normalize_tactile
 
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive, got {chunk_size}")
@@ -215,7 +247,8 @@ class VTLADataset(Dataset):
             CAMERA_PATHS.get(name, f'observation/{name}/rgb') for name in self.camera_names
         ]
         self.samples = []
-        all_joints = []
+        all_qpos = []
+        all_actions = []
         self.raw_joint_dim = None
         self.tactile_paths_by_episode = {}
 
@@ -258,29 +291,88 @@ class VTLADataset(Dataset):
                         )
                 if len(joints) < 2:
                     continue
-                all_joints.append(joints[:, self.joint_indices])
+                all_qpos.append(joints[:-1, self.joint_indices])
+                all_actions.append(joints[1:, self.joint_indices])
                 self.samples.extend((episode_path, timestep) for timestep in range(len(joints) - 1))
 
         if not self.samples:
             raise ValueError("No trajectory contains enough frames to form a training sample")
 
         if normalization_stats is None:
-            joint_values = np.concatenate(all_joints, axis=0)
-            self.joint_mean = joint_values.mean(axis=0).astype(np.float32)
-            self.joint_std = np.maximum(joint_values.std(axis=0), 1e-2).astype(np.float32)
-            self.normalization_source = 'selected episodes'
+            stats_files = (
+                [Path(path).expanduser().resolve() for path in normalization_episode_files]
+                if normalization_episode_files is not None else self.episode_files
+            )
+            if not stats_files:
+                raise ValueError("The normalization episode list is empty")
+            if stats_files == self.episode_files:
+                qpos_values = np.concatenate(all_qpos, axis=0)
+                action_values = np.concatenate(all_actions, axis=0)
+            else:
+                qpos_chunks = []
+                action_chunks = []
+                for episode_path in stats_files:
+                    if not episode_path.is_file():
+                        raise ValueError(f"Normalization episode not found: {episode_path}")
+                    with h5py.File(episode_path, 'r') as root:
+                        _require_datasets(root, ['embodiment/joint'], episode_path)
+                        joints = np.asarray(root['embodiment/joint'], dtype=np.float32)
+                    if joints.ndim != 2 or len(joints) < 2:
+                        raise ValueError(
+                            f"{episode_path}: invalid normalization joint shape {joints.shape}"
+                        )
+                    if max(self.joint_indices) >= joints.shape[1]:
+                        raise ValueError(
+                            f"{episode_path}: normalization joint shape {joints.shape} cannot "
+                            f"provide indices {self.joint_indices}"
+                        )
+                    qpos_chunks.append(joints[:-1, self.joint_indices])
+                    action_chunks.append(joints[1:, self.joint_indices])
+                qpos_values = np.concatenate(qpos_chunks, axis=0)
+                action_values = np.concatenate(action_chunks, axis=0)
+
+            self.qpos_mean = qpos_values.mean(axis=0).astype(np.float32)
+            self.qpos_std = np.maximum(qpos_values.std(axis=0), 1e-2).astype(np.float32)
+            self.action_mean = action_values.mean(axis=0).astype(np.float32)
+            self.action_std = np.maximum(action_values.std(axis=0), 1e-2).astype(np.float32)
+            self.normalization_source = f'{len(stats_files)} selected episodes'
         else:
-            self.joint_mean = np.asarray(normalization_stats['joint_mean'], dtype=np.float32)
-            self.joint_std = np.asarray(normalization_stats['joint_std'], dtype=np.float32)
+            # Historical VTLA checkpoints stored one joint distribution for
+            # both state and action.  Preserve read compatibility while new
+            # checkpoints follow UniVTAC's separate qpos/action statistics.
+            legacy_mean = normalization_stats.get('joint_mean')
+            legacy_std = normalization_stats.get('joint_std')
+            self.qpos_mean = np.asarray(
+                normalization_stats.get('qpos_mean', legacy_mean), dtype=np.float32
+            )
+            self.qpos_std = np.asarray(
+                normalization_stats.get('qpos_std', legacy_std), dtype=np.float32
+            )
+            self.action_mean = np.asarray(
+                normalization_stats.get('action_mean', legacy_mean), dtype=np.float32
+            )
+            self.action_std = np.asarray(
+                normalization_stats.get('action_std', legacy_std), dtype=np.float32
+            )
             expected_shape = (len(self.joint_indices),)
-            if self.joint_mean.shape != expected_shape or self.joint_std.shape != expected_shape:
+            stat_shapes = {
+                'qpos_mean': self.qpos_mean.shape,
+                'qpos_std': self.qpos_std.shape,
+                'action_mean': self.action_mean.shape,
+                'action_std': self.action_std.shape,
+            }
+            if any(shape != expected_shape for shape in stat_shapes.values()):
                 raise ValueError(
-                    f"Normalization stats must have shape {expected_shape}, got "
-                    f"mean={self.joint_mean.shape}, std={self.joint_std.shape}"
+                    f"Normalization stats must have shape {expected_shape}, got {stat_shapes}"
                 )
-            if np.any(self.joint_std <= 0):
+            if np.any(self.qpos_std <= 0) or np.any(self.action_std <= 0):
                 raise ValueError("Normalization standard deviations must be positive")
             self.normalization_source = 'provided training statistics'
+
+        # Compatibility aliases for old evaluators.  New code must use the
+        # explicit qpos/action fields so deployment de-normalizes correctly.
+        self.joint_mean = self.qpos_mean
+        self.joint_std = self.qpos_std
 
         if verbose:
             print(
@@ -296,6 +388,10 @@ class VTLADataset(Dataset):
         return {
             'joint_mean': self.joint_mean.copy(),
             'joint_std': self.joint_std.copy(),
+            'qpos_mean': self.qpos_mean.copy(),
+            'qpos_std': self.qpos_std.copy(),
+            'action_mean': self.action_mean.copy(),
+            'action_std': self.action_std.copy(),
             'action_source': 'next embodiment/joint positions',
             'raw_joint_dim': self.raw_joint_dim,
             'state_dim': len(self.joint_indices),
@@ -304,10 +400,15 @@ class VTLADataset(Dataset):
             'normalization_source': self.normalization_source,
         }
 
-    def _normalize(self, values: np.ndarray) -> np.ndarray:
+    def _normalize_qpos(self, values: np.ndarray) -> np.ndarray:
         if not self.normalize_joints:
             return values.astype(np.float32, copy=False)
-        return ((values - self.joint_mean) / self.joint_std).astype(np.float32)
+        return ((values - self.qpos_mean) / self.qpos_std).astype(np.float32)
+
+    def _normalize_actions(self, values: np.ndarray) -> np.ndarray:
+        if not self.normalize_joints:
+            return values.astype(np.float32, copy=False)
+        return ((values - self.action_mean) / self.action_std).astype(np.float32)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         episode_path, timestep = self.samples[idx]
@@ -315,7 +416,7 @@ class VTLADataset(Dataset):
         with h5py.File(episode_path, 'r') as root:
             joints = root['embodiment/joint']
             qpos = np.asarray(joints[timestep], dtype=np.float32)[self.joint_indices]
-            qpos = self._normalize(qpos)
+            qpos = self._normalize_qpos(qpos)
 
             cam_images = []
             for name in self.camera_names:
@@ -325,13 +426,15 @@ class VTLADataset(Dataset):
             tac_images = []
             for name in self.tactile_names:
                 path = self.tactile_paths_by_episode[episode_path][name]
-                tac_images.append(image_to_tensor(root[path][timestep]))
+                tac_images.append(
+                    image_to_tensor(root[path][timestep], normalize=self.normalize_tactile)
+                )
 
             action_end = min(timestep + 1 + self.chunk_size, len(joints))
             future_joints = np.asarray(
                 joints[timestep + 1:action_end], dtype=np.float32
             )[:, self.joint_indices]
-            future_joints = self._normalize(future_joints)
+            future_joints = self._normalize_actions(future_joints)
 
         valid_steps = len(future_joints)
         action_dim = future_joints.shape[1]
@@ -430,6 +533,7 @@ def create_dataloader(args, stage: str = 'stage2') -> DataLoader:
             args.chunk_size,
             state_dim=args.state_dim,
             joint_indices=getattr(args, 'joint_indices', None),
+            normalize_tactile=getattr(args, 'normalize_tactile', True),
         )
 
     return DataLoader(

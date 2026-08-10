@@ -7,6 +7,7 @@
 | 文件 | 用途 |
 | --- | --- |
 | `training/start_training_multigpu.sh` | 选择/校验物理 GPU，在 tmux 中启动可复现 DDP 训练 |
+| `training/start_official_tasks.sh` | 在 GPU 1/2/3 上按 UniVTAC 论文预算并行训练四个官方任务 |
 | `training/start_training.sh` | 单 GPU 后台训练 |
 | `training/check_training.sh` | 显示 VTLA tmux、最近 run、日志尾部和 GPU 状态 |
 | `training/train_vtla_multigpu.py` | DDP 三阶段训练实现 |
@@ -16,6 +17,12 @@
 
 ```bash
 scripts/training/start_training_multigpu.sh stage2 3 1,2,3
+```
+
+论文对齐的四任务训练：
+
+```bash
+scripts/training/start_official_tasks.sh
 ```
 
 ## evaluation
