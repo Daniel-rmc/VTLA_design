@@ -92,6 +92,33 @@ if not result["complete"] or result["unresolved_error_events"]:
 PY
 }
 
+ensure_task_complete_locked() {
+    local task="$1"
+    local result_root="${UNIVTAC_DIR}/eval_result/VTLA/${task}/${task}"
+    mkdir -p "${result_root}"
+    (
+        flock 9
+        export VTLA_EVAL_LOCK_HELD=1
+        ensure_task_complete "${task}"
+    ) 9>"${result_root}/.evaluation.lock"
+}
+
+if [[ "${1:-}" == "--lane" ]]; then
+    shift
+    if (( $# == 0 )); then
+        echo "Usage: GPU_ID=N $0 --lane TASK [TASK ...]" >&2
+        exit 2
+    fi
+    for task in "$@"; do
+        if [[ ! " ${TASKS[*]} " =~ " ${task} " ]]; then
+            echo "Error: unsupported remaining task: ${task}" >&2
+            exit 2
+        fi
+        ensure_task_complete_locked "${task}"
+    done
+    exit 0
+fi
+
 if [[ "${1:-}" == "--worker" ]]; then
     mkdir -p "${SUITE_DIR}"
     if [[ ! -f "${SUITE_DIR}/smoke_exit_code" || "$(<"${SUITE_DIR}/smoke_exit_code")" != 0 ]]; then
@@ -103,7 +130,7 @@ if [[ "${1:-}" == "--worker" ]]; then
     fi
 
     for task in "${TASKS[@]}"; do
-        ensure_task_complete "${task}"
+        ensure_task_complete_locked "${task}"
     done
 
     "${PYTHON_BIN}" -m scripts.evaluation.summarize_univtac_suite \

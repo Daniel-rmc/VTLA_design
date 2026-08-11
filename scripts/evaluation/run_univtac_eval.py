@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -16,6 +17,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RUN = PROJECT_ROOT / "runs" / "stage2" / "20260809_155942_1073ae9_gpu123"
+SEED_RESULT_RE = re.compile(r"\[\d+\s*\]\s+Seed\s+(\d+)\s+(?:success|failed)\s+after")
 
 
 def parse_args():
@@ -65,6 +67,42 @@ def main():
             "review the displayed agreement, and answer the prompt:\n"
             f"  {args.python} -c \"import isaacsim\""
         )
+
+    result_root = (
+        args.univtac_root
+        / "eval_result"
+        / "VTLA"
+        / args.task
+        / args.deploy_config.stem
+    )
+    result_root.mkdir(parents=True, exist_ok=True)
+    lock_file = (result_root / ".evaluation.lock").open("a+", encoding="utf-8")
+    if os.environ.get("VTLA_EVAL_LOCK_HELD") != "1":
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+    # Re-check persisted results only after acquiring the task lock. This makes
+    # separately scheduled GPU lanes safe: a later lane waits for the first,
+    # then skips seeds that were completed while it was waiting.
+    if (
+        args.start_seed >= 0
+        and args.max_seed >= args.start_seed
+        and args.max_seed - args.start_seed + 1 == args.total_num
+    ):
+        completed_seeds = set()
+        for result_log in result_root.glob("*/log.log"):
+            completed_seeds.update(
+                int(seed)
+                for seed in SEED_RESULT_RE.findall(
+                    result_log.read_text(encoding="utf-8", errors="replace")
+                )
+            )
+        requested_seeds = set(range(args.start_seed, args.max_seed + 1))
+        if requested_seeds <= completed_seeds:
+            print(
+                f"Skipping {args.task}: all requested seeds "
+                f"{args.start_seed}-{args.max_seed} are already complete"
+            )
+            return
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     archive_dir = args.run_dir / "eval" / "univtac" / timestamp
@@ -135,13 +173,6 @@ def main():
         json.dumps(request, indent=2) + "\n", encoding="utf-8"
     )
 
-    result_root = (
-        args.univtac_root
-        / "eval_result"
-        / "VTLA"
-        / args.task
-        / args.deploy_config.stem
-    )
     preexisting = set(result_root.iterdir()) if result_root.is_dir() else set()
     output_tail = ""
     interrupted = False
