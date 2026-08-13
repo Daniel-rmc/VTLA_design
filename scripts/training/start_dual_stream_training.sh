@@ -58,7 +58,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID $PYTHON ${PROJECT_ROOT}/scripts/training/train_dual
     --output-dir ${PROJECT_ROOT}/runs/dual_stream \
     --device cuda \
     \
-    --batch-size 8 \
+    --batch-size 32 \
     --num-episodes 50 \
     --train-ratio 0.9 \
     --chunk-size 50 \
@@ -67,7 +67,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID $PYTHON ${PROJECT_ROOT}/scripts/training/train_dual
     --camera-names $CAMERA_NAMES \
     --tactile-names $TACTILE_NAMES \
     \
-    --state-dim 14 \
+    --state-dim 9 \
     --hidden-dim 512 \
     --nheads 8 \
     --dim-feedforward 2048 \
@@ -100,6 +100,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID $PYTHON ${PROJECT_ROOT}/scripts/training/train_dual
     --lr 1e-4 \
     --lr-backbone 1e-5 \
     --lr-tactile 1e-5 \
+    --lr-vision-backbone 1e-5 \
     --weight-decay 1e-4 \
     --grad-clip 0.0 \
     \

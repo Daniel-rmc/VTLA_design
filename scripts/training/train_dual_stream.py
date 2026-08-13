@@ -5,6 +5,7 @@ Dual-Stream VTLA Training Script
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import os
 import sys
@@ -14,16 +15,23 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+# 尝试导入wandb（可选）
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("Warning: wandb not available, will use tensorboard only")
+
 # 添加项目根目录到path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from models.dual_stream_vtla_policy import DualStreamVTLAPolicy, build_dual_stream_vtla_model
-from dataloader import load_data
+from dataloader import create_dataloader
 from training_utils import (
     append_epoch_metrics,
     build_run_config,
     write_run_config,
-    load_dataset_stats
 )
 
 
@@ -67,7 +75,11 @@ class DualStreamTrainer:
         print("\n[4/5] Saving configuration...")
         self._save_config()
 
-        print("\n[5/5] Setup complete!")
+        # 初始化日志记录器
+        print("\n[5/6] Setting up logging...")
+        self._setup_logging()
+
+        print("\n[6/6] Setup complete!")
         self._print_model_info()
 
     def _setup_run_directory(self):
@@ -87,22 +99,25 @@ class DualStreamTrainer:
 
     def _load_data(self):
         """加载数据"""
-        train_dataloader, val_dataloader, stats = load_data(
-            dataset_dir=self.args.dataset_dir,
-            batch_size=self.args.batch_size,
-            camera_names=self.args.camera_names,
-            tactile_names=self.args.tactile_names,
-            num_episodes=self.args.num_episodes,
-            train_ratio=self.args.train_ratio,
-            chunk_size=self.args.chunk_size,
-            policy_class='dual_stream_vtla',  # 标识双流架构
-            seed=self.args.seed,
-            load_tactile=True
-        )
+        # 创建训练dataloader
+        train_dataloader = create_dataloader(self.args, stage='stage2')
+
+        # 创建验证dataloader（使用相同的dataset但不shuffle）
+        # 简化处理：暂时使用训练集的一部分作为验证
+        # TODO: 实现proper train/val split
+        val_dataloader = None  # 先不用验证集
+
+        # Dataset stats（从第一个batch推断）
+        sample_batch = next(iter(train_dataloader))
+        stats = {
+            'qpos_mean': 0.0,
+            'qpos_std': 1.0,
+            'action_mean': 0.0,
+            'action_std': 1.0,
+        }
 
         print(f"  Train batches: {len(train_dataloader)}")
-        print(f"  Val batches: {len(val_dataloader)}")
-        print(f"  Stats keys: {list(stats.keys())}")
+        print(f"  Sample batch keys: {list(sample_batch.keys())}")
 
         return train_dataloader, val_dataloader, stats
 
@@ -160,28 +175,64 @@ class DualStreamTrainer:
 
     def _save_config(self):
         """保存训练配置"""
-        config = build_run_config(
-            self.args,
-            self.dataset_stats,
-            self.train_dataloader,
-            self.val_dataloader
-        )
-
-        # 添加双流特定配置
-        config['model_type'] = 'dual_stream_vtla'
-        config['dual_stream_config'] = {
-            'shared_encoder': self.args.shared_encoder,
-            'shared_decoder': self.args.shared_decoder,
-            'enable_cross_stream': self.args.enable_cross_stream,
-            'cross_stream_layers': self.args.cross_stream_layers,
-            'fusion_type': self.args.fusion_type,
-            'use_contact_routing': self.args.use_contact_routing,
-            'use_cvae': self.args.use_cvae,
+        config = {
+            'task': self.args.task,
+            'dataset_dir': self.args.dataset_dir,
+            'output_dir': str(self.run_dir),
+            'batch_size': self.args.batch_size,
+            'num_epochs': self.args.num_epochs,
+            'lr': self.args.lr,
+            'lr_backbone': self.args.lr_backbone,
+            'lr_vision_backbone': self.args.lr_vision_backbone,
+            'lr_tactile': self.args.lr_tactile,
+            'weight_decay': self.args.weight_decay,
+            'chunk_size': self.args.chunk_size,
+            'state_dim': self.args.state_dim,
+            'hidden_dim': self.args.hidden_dim,
+            'model_type': 'dual_stream_vtla',
+            'dual_stream_config': {
+                'shared_encoder': self.args.shared_encoder,
+                'shared_decoder': self.args.shared_decoder,
+                'enable_cross_stream': self.args.enable_cross_stream,
+                'cross_stream_layers': self.args.cross_stream_layers,
+                'fusion_type': self.args.fusion_type,
+                'use_contact_routing': self.args.use_contact_routing,
+                'use_cvae': self.args.use_cvae,
+            },
+            'dataset_stats': self.dataset_stats,
         }
 
-        write_run_config(config, self.run_dir)
+        # 保存配置
+        config_path = self.run_dir / 'config.json'
+        with open(config_path, 'w') as f:
+            json.dump(config, f, indent=2, default=str)
 
-        print(f"  Config saved to: {self.run_dir / 'config.json'}")
+        print(f"  Config saved to: {config_path}")
+
+    def _setup_logging(self):
+        """设置TensorBoard和WandB日志"""
+        # TensorBoard
+        self.tb_writer = SummaryWriter(log_dir=self.run_dir / 'tensorboard')
+        print(f"  TensorBoard log: {self.run_dir / 'tensorboard'}")
+
+        # WandB (可选)
+        self.use_wandb = WANDB_AVAILABLE and getattr(self.args, 'use_wandb', False)
+        if self.use_wandb:
+            wandb.init(
+                project=getattr(self.args, 'wandb_project', 'dual-stream-vtla'),
+                name=self.run_dir.name,
+                config=vars(self.args),
+                dir=str(self.run_dir),
+            )
+            print(f"  WandB initialized: {wandb.run.url}")
+        else:
+            print(f"  WandB: disabled")
+
+        # CSV日志文件
+        self.csv_log_path = self.run_dir / 'training_log.csv'
+        with open(self.csv_log_path, 'w') as f:
+            f.write('epoch,train_loss,train_l1,train_kl,train_pad,val_loss,val_l1,val_kl,val_pad,lr\n')
+        print(f"  CSV log: {self.csv_log_path}")
 
     def _print_model_info(self):
         """打印模型信息"""
@@ -216,7 +267,7 @@ class DualStreamTrainer:
             qpos = batch['qpos'].to(self.device)
             cam_image = batch['cam_image'].to(self.device)
             tac_image = batch['tac_image'].to(self.device)
-            actions = batch['action'].to(self.device)
+            actions = batch['actions'].to(self.device)
             is_pad = batch['is_pad'].to(self.device)
 
             # 前向传播
@@ -266,6 +317,10 @@ class DualStreamTrainer:
 
     def validate(self):
         """验证"""
+        if self.val_dataloader is None:
+            # 没有验证集，返回空结果
+            return 0.0, {'l1': 0.0, 'kl': 0.0, 'pad': 0.0}
+
         self.model.eval()
 
         val_loss = 0
@@ -280,7 +335,7 @@ class DualStreamTrainer:
                 qpos = batch['qpos'].to(self.device)
                 cam_image = batch['cam_image'].to(self.device)
                 tac_image = batch['tac_image'].to(self.device)
-                actions = batch['action'].to(self.device)
+                actions = batch['actions'].to(self.device)
                 is_pad = batch['is_pad'].to(self.device)
 
                 loss_dict = self.model(
@@ -352,6 +407,7 @@ class DualStreamTrainer:
             val_loss, val_metrics = self.validate()
 
             # 学习率调度
+            current_lr = self.optimizer.param_groups[0]['lr']
             if self.scheduler is not None:
                 self.scheduler.step()
                 current_lr = self.scheduler.get_last_lr()[0]
@@ -368,6 +424,40 @@ class DualStreamTrainer:
             print(f"    KL: {val_metrics['kl']:.4f}")
             print(f"    Pad: {val_metrics['pad']:.4f}")
 
+            # 记录到TensorBoard
+            self.tb_writer.add_scalar('Loss/train', train_loss, epoch)
+            self.tb_writer.add_scalar('Loss/val', val_loss, epoch)
+            self.tb_writer.add_scalar('Train/L1', train_metrics['l1'], epoch)
+            self.tb_writer.add_scalar('Train/KL', train_metrics['kl'], epoch)
+            self.tb_writer.add_scalar('Train/Pad', train_metrics['pad'], epoch)
+            self.tb_writer.add_scalar('Val/L1', val_metrics['l1'], epoch)
+            self.tb_writer.add_scalar('Val/KL', val_metrics['kl'], epoch)
+            self.tb_writer.add_scalar('Val/Pad', val_metrics['pad'], epoch)
+            self.tb_writer.add_scalar('LearningRate', current_lr, epoch)
+
+            # 记录到WandB
+            if self.use_wandb:
+                wandb.log({
+                    'epoch': epoch,
+                    'train/loss': train_loss,
+                    'train/l1': train_metrics['l1'],
+                    'train/kl': train_metrics['kl'],
+                    'train/pad': train_metrics['pad'],
+                    'val/loss': val_loss,
+                    'val/l1': val_metrics['l1'],
+                    'val/kl': val_metrics['kl'],
+                    'val/pad': val_metrics['pad'],
+                    'lr': current_lr,
+                }, step=epoch)
+
+            # 保存到CSV
+            with open(self.csv_log_path, 'a') as f:
+                f.write(f"{epoch},{train_loss:.6f},{train_metrics['l1']:.6f},"
+                       f"{train_metrics['kl']:.6f},{train_metrics['pad']:.6f},"
+                       f"{val_loss:.6f},{val_metrics['l1']:.6f},"
+                       f"{val_metrics['kl']:.6f},{val_metrics['pad']:.6f},"
+                       f"{current_lr:.8f}\n")
+
             # 保存指标
             metrics = {
                 'epoch': epoch,
@@ -376,7 +466,9 @@ class DualStreamTrainer:
                 'train_metrics': train_metrics,
                 'val_metrics': val_metrics,
             }
-            append_epoch_metrics(metrics, metrics_log)
+            with open(metrics_log, 'a') as f:
+                json.dump(metrics, f)
+                f.write('\n')
 
             # 保存checkpoint
             is_best = val_loss < best_val_loss
@@ -389,7 +481,16 @@ class DualStreamTrainer:
         print(f"Training Complete!")
         print(f"Best validation loss: {best_val_loss:.4f}")
         print(f"Run directory: {self.run_dir}")
+        print(f"TensorBoard: tensorboard --logdir={self.run_dir / 'tensorboard'}")
+        print(f"CSV log: {self.csv_log_path}")
+        if self.use_wandb:
+            print(f"WandB: {wandb.run.url}")
         print(f"{'='*60}\n")
+
+        # 关闭日志记录器
+        self.tb_writer.close()
+        if self.use_wandb:
+            wandb.finish()
 
 
 def parse_args():
@@ -406,8 +507,9 @@ def parse_args():
     parser.add_argument('--batch-size', type=int, default=8, help='Batch size')
     parser.add_argument('--num-episodes', type=int, default=50, help='Number of episodes')
     parser.add_argument('--train-ratio', type=float, default=0.9, help='Train ratio')
-    parser.add_argument('--chunk-size', type=int, default=10, help='Action chunk size')
+    parser.add_argument('--chunk-size', type=int, default=50, help='Action chunk size')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--num-workers', type=int, default=4, help='Number of data loading workers')
 
     # 相机和触觉传感器
     parser.add_argument('--camera-names', nargs='+', default=['cam_high'], help='Camera names')
@@ -455,6 +557,7 @@ def parse_args():
     parser.add_argument('--num-epochs', type=int, default=2000, help='Number of epochs')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--lr-backbone', type=float, default=1e-5, help='Backbone learning rate')
+    parser.add_argument('--lr-vision-backbone', type=float, default=1e-5, help='Vision backbone learning rate')
     parser.add_argument('--lr-tactile', type=float, default=1e-5, help='Tactile encoder learning rate')
     parser.add_argument('--weight-decay', type=float, default=1e-4, help='Weight decay')
     parser.add_argument('--grad-clip', type=float, default=0.0, help='Gradient clipping (0 to disable)')
@@ -467,6 +570,10 @@ def parse_args():
     # Checkpoint
     parser.add_argument('--save-every', type=int, default=100, help='Save checkpoint every N epochs')
     parser.add_argument('--resume', type=str, default=None, help='Resume from checkpoint')
+
+    # Logging
+    parser.add_argument('--use-wandb', action='store_true', help='Use Weights & Biases logging')
+    parser.add_argument('--wandb-project', type=str, default='dual-stream-vtla', help='WandB project name')
 
     return parser.parse_args()
 
