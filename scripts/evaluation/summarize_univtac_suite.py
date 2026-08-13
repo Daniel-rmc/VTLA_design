@@ -26,6 +26,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--group-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--tasks", nargs="+", choices=TASKS, default=list(TASKS))
+    parser.add_argument(
+        "--checkpoint-policy",
+        default="per-task stage2_last.ckpt at optimizer step 4000",
+    )
+    parser.add_argument(
+        "--evaluation-type",
+        default="UniVTAC simulator task suite",
+    )
     return parser.parse_args()
 
 
@@ -54,9 +62,9 @@ def main() -> None:
     total_successes = sum(row["successes"] for row in rows)
     total_episodes = sum(row["episodes"] for row in rows)
     summary = {
-        "evaluation_type": "UniVTAC simulator task suite",
+        "evaluation_type": args.evaluation_type,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "checkpoint_policy": "per-task stage2_last.ckpt at optimizer step 4000",
+        "checkpoint_policy": args.checkpoint_policy,
         "seed_range_per_task": {"start": 1000000, "end": 1000099},
         "complete": complete,
         "missing_tasks": missing,

@@ -1,0 +1,6 @@
+# Independent result namespace for the released ACT + UniVTAC Encoder policy.
+policy_name: ACT
+seed: 0
+ckpt_setting: 50
+instruction_type: seen
+instuction_file: null
