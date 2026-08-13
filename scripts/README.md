@@ -33,7 +33,6 @@ scripts/training/start_official_tasks.sh
 | `scripts.evaluation.run_univtac_eval` | 调用 UniVTAC、固定 GPU，并归档请求/配置/日志/结果 |
 | `scripts.evaluation.summarize_univtac_eval` | 按 seed 合并分片，检查缺失、重复、错误、视频和 metadata |
 | `evaluation/start_official_suite_eval.sh` | 复用已通过的冒烟检查，在 GPU 0 依次评测尚未覆盖的 7 个官方任务 |
-| `evaluation/start_act_univtac_encoder_eval.sh` | 用发布的 ACT + UniVTAC Encoder checkpoint 在固定 100 seeds 上做双卡复现评测 |
 | `scripts.evaluation.summarize_univtac_suite` | 合并指定任务的逐任务结果，计算 suite macro/micro 平均 |
 
 示例：

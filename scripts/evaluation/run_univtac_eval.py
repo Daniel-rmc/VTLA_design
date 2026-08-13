@@ -14,8 +14,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RUN = PROJECT_ROOT / "runs" / "stage2" / "20260809_155942_1073ae9_gpu123"
@@ -38,11 +36,6 @@ def parse_args():
     )
     parser.add_argument("--task", default="grasp_classify")
     parser.add_argument("--task-config", default="demo")
-    parser.add_argument(
-        "--result-policy-name",
-        default=None,
-        help="Result namespace; defaults to policy_name in the deploy YAML",
-    )
     parser.add_argument("--gpu", default="3", help="Physical GPU ID exposed as cuda:0")
     parser.add_argument("--total-num", type=int, default=100)
     parser.add_argument("--start-seed", type=int, default=-1)
@@ -64,8 +57,6 @@ def eula_file(python_path: Path) -> Path:
 
 def main():
     args = parse_args()
-    deploy_data = yaml.safe_load(args.deploy_config.read_text(encoding="utf-8"))
-    policy_result_name = args.result_policy_name or deploy_data["policy_name"]
     accepted_path = eula_file(args.python)
     accepted = accepted_path.is_file() and accepted_path.read_text(encoding="utf-8").strip().lower() in {
         "y", "yes", "1"
@@ -80,7 +71,7 @@ def main():
     result_root = (
         args.univtac_root
         / "eval_result"
-        / policy_result_name
+        / "VTLA"
         / args.task
         / args.deploy_config.stem
     )
@@ -177,12 +168,6 @@ def main():
         "expert_check": args.expert_check,
         "headless": args.headless,
         "display_removed": args.headless,
-        "result_policy_name": policy_result_name,
-        "policy_environment": {
-            "TRAIN_CONFIG": environment.get("TRAIN_CONFIG"),
-            "CKPT_CONFIG": environment.get("CKPT_CONFIG"),
-            "EP_NUM": environment.get("EP_NUM"),
-        },
     }
     (archive_dir / "request.json").write_text(
         json.dumps(request, indent=2) + "\n", encoding="utf-8"
