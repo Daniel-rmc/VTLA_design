@@ -1,0 +1,60 @@
+# Dual-Stream VTLA Deployment Configuration
+# 用于UniVTAC闭环评测
+
+policy_class: DualStreamVTLAPolicy
+policy_config:
+  # 模型架构
+  state_dim: 14
+  chunk_size: 50
+  hidden_dim: 512
+  nheads: 8
+  dim_feedforward: 2048
+  enc_layers: 4
+  dec_layers: 6
+  dropout: 0.1
+  pre_norm: false
+
+  # 双流特定配置
+  shared_encoder: true
+  shared_decoder: false
+  enable_cross_stream: false
+  cross_stream_layers: []
+  fusion_type: 'gated'
+  use_contact_routing: false
+  use_cvae: true
+  latent_dim: 32
+
+  # 触觉编码器
+  tactile_backbone: 'resnet34'
+  tactile_latent_dim: 512
+  pretrained_backbones: true
+
+  # Vision backbone
+  backbone: 'resnet18'
+  lr_backbone: 1e-5
+  masks: false
+  dilation: false
+  position_embedding: 'sine'
+
+  # 损失权重（推理时不使用，但保留以兼容checkpoint）
+  kl_weight: 10.0
+  pad_weight: 1.0
+  l1_reduction: 'valid_mean'
+  aux_vision_weight: 0.0
+  aux_tactile_weight: 0.0
+
+# 相机配置（会被任务特定配置覆盖）
+camera_names:
+  - cam_high
+
+# 触觉传感器配置
+tactile_names:
+  - tac_left
+  - tac_right
+
+# 推理配置
+temporal_agg: true
+use_deterministic_latent: true  # 推理时使用确定性latent（均值）
+
+# Checkpoint路径（运行时指定）
+ckpt_name: 'dual_stream_best.ckpt'

@@ -1,181 +1,287 @@
-# VTLA Design
+# 双流VTLA (Dual-Stream Vision-Tactile-Language-Action)
 
-面向 UniVTAC 接触操作任务的视觉—触觉动作策略研究仓库。项目包含模型实现、三阶段训练、官方数据校验、离线验证、UniVTAC 闭环评测和完整的实验归档工具。
+面向接触丰富操作任务的双流视触觉动作策略。
 
-> 当前实现尚未接入语言编码器，因此严格来说是 Vision-Tactile-Action（VTA）策略。官方 HDF5 没有独立的 commanded-action 字段，训练按 ACT 数据约定使用下一时刻关节位置作为动作代理。
+---
 
-## 当前基线
+## 🎯 核心理念
 
-- 数据：ModelScope `byml2024/UniVTAC` 的完整 `grasp_classify/clean` 子集，共 100 条轨迹、5,265 个时序样本。
-- 控制接口：原始 9D 关节观测取列 `0..7`，模型与 UniVTAC 控制端统一为 8D（7 个机械臂关节 + 1 个夹爪命令）。
-- 训练：物理 GPU `1,2,3`，BF16，batch 64/GPU，全局 batch 192，150 epochs，90/10 分层训练/验证切分。
-- 最佳部署候选：epoch 130。
-- UniVTAC：固定 100 个 seed 上成功 80/100（80.0%）。
+**保持视觉和触觉的模态独立性直到最终融合层**，让每个模态有独立的信息处理通路。
 
-完整状态和复盘见 [训练状态](docs/TRAINING_STATUS.md) 与本地运行报告：
-`runs/stage2/20260809_155942_1073ae9_gpu123/eval/EVALUATION_SUMMARY.md`。
+### 与原始VTLA的关键区别
 
-## 目录结构
+| 维度 | 原始VTLA | 双流架构 |
+|------|----------|----------|
+| **融合时机** | 早期融合（特征提取后） | 晚期融合（action head层） |
+| **独立性** | 交叉注意力导致模态混淆 | 完全独立到decoder输出 |
+| **训练策略** | 三阶段分离训练 | 端到端联合训练 |
+| **可解释性** | 难以量化模态贡献 | 可视化fusion权重 |
 
-```text
+详细分析见 [架构批判文档](docs/architecture_critique.md)
+
+---
+
+## 📁 项目结构
+
+```
 VTLA_design/
-├── README.md                  # 项目总览和常用命令
-├── dataloader.py              # HDF5 数据发现、切分、归一化和样本构造
-├── training_utils.py          # 配置、Git/GPU 元数据和指标记录
-├── models/                    # 模型主体、编码器、融合层和动作头
-├── scripts/
-│   ├── training/              # 单卡/多卡训练入口、启动器和状态检查
-│   ├── evaluation/            # 离线评测、UniVTAC 评测和 seed 聚合
-│   └── diagnostics/           # NCCL 与官方数据完整性检查
-├── univtac_adapter/           # UniVTAC Policy 适配器和冻结部署配置
-├── data_manifests/            # 官方数据清单与 SHA-256 指纹
-├── docs/                      # 架构、训练策略、代码审查和运行指南
-├── tests/                     # 单元与集成回归测试
-├── runs/                      # 每次训练/评测的自包含产物（Git 忽略）
-├── logs/                      # 历史日志（Git 忽略）
-└── checkpoints/               # 历史 checkpoint（Git 忽略）
+├── models/                          # 模型实现
+│   ├── dual_stream_transformer.py   # 双流Transformer
+│   ├── fusion_action_head.py        # 融合动作头（4种策略）
+│   └── dual_stream_vtla_policy.py   # 完整策略封装
+│
+├── scripts/                         # 训练和评测脚本
+│   ├── training/
+│   │   ├── train_dual_stream.py     # 训练主脚本
+│   │   ├── start_dual_stream_training.sh  # 快速启动脚本
+│   │   └── smoke_test_dual_stream.py      # 快速测试
+│   └── evaluation/
+│       └── run_univtac_eval.py      # UniVTAC评测
+│
+├── configs/                         # 配置文件
+│   └── dual_stream_stage2.json      # 训练配置
+│
+├── univtac_adapter/                 # UniVTAC适配
+│   └── deploy_dual_stream.yml       # 部署配置
+│
+├── data_manifests/                  # 数据清单
+│   ├── put_bottle_in_shelf_official_first50.json
+│   ├── insert_HDMI_official_first50.json
+│   └── lift_can_official_first50.json
+│
+└── docs/                            # 文档
+    ├── LAUNCH_CHECKLIST.md          # 🚀 启动清单
+    ├── EXPERIMENT_PLAN.md           # 完整实验计划
+    ├── STATUS_SUMMARY.md            # 快速状态总览
+    ├── dual_stream_architecture.md  # 架构设计
+    └── architecture_critique.md     # 原架构分析
 ```
 
-脚本和文档的详细索引分别见 [scripts/README.md](scripts/README.md) 与 [docs/README.md](docs/README.md)。
+---
 
-## 环境约定
+## 🚀 快速开始
 
-当前验证环境：
+### 1. 环境准备
 
-- 项目：`/home/rmc/workspace/VTLA_design`
-- UniVTAC：`/home/rmc/workspace/UniVTAC`
-- Python：`/home/rmc/miniconda/envs/UniVTAC/bin/python`
-- GPU：4 × NVIDIA L40S
+```bash
+# 使用UniVTAC环境
+conda activate UniVTAC
 
-以下命令均假设从项目根目录执行：
+# 确认GPU可用
+nvidia-smi
+```
+
+### 2. 运行测试
 
 ```bash
 cd /home/rmc/workspace/VTLA_design
+
+# 快速smoke test（~2分钟）
+python scripts/training/smoke_test_dual_stream.py
 ```
 
-## 数据校验
-
-重新验证官方任务子集并生成 manifest：
+### 3. 启动训练
 
 ```bash
-/home/rmc/miniconda/envs/UniVTAC/bin/python \
-  -m scripts.diagnostics.validate_univtac_dataset \
-  --dataset-dir /home/rmc/workspace/UniVTAC/data/official/grasp_classify/clean \
-  --output data_manifests/grasp_classify_clean_modelscope.json
+# 单任务pilot：insert_HDMI on GPU 1
+./scripts/training/start_dual_stream_training.sh insert_HDMI 1
 ```
 
-校验内容包括 episode 数量、metadata、HDF5 必需字段、帧数一致性、9D 原始关节布局、类别以及每个文件的 SHA-256。
+**训练参数**：
+- 数据：前50条轨迹，80/20 split
+- Batch size: 8
+- Epochs: 2000
+- 预计时间：8-12小时
 
-## 训练
-
-### UniVTAC 论文对齐的八任务训练
-
-全部八个官方任务使用各自的 episode 0–49、官方 seed-1 80/20 切分、单任务全局 batch 64 和精确 4000 optimizer steps。首轮四任务启动命令为：
+### 4. UniVTAC评测
 
 ```bash
-scripts/training/start_official_tasks.sh
+# 找到run目录
+RUN_DIR=$(ls -td runs/dual_stream/dual_stream_insert_HDMI_* | head -1)
+
+# 评测100 seeds
+python scripts/evaluation/run_univtac_eval.py \
+  --run-dir $RUN_DIR \
+  --deploy-config univtac_adapter/deploy_dual_stream.yml \
+  --gpu 1 \
+  --total-num 100
 ```
 
-剩余四任务可续接到同一个 run group：
+**预计时间**：8-10小时
+
+---
+
+## 📊 实验目标
+
+### 阶段1：单任务验证 (2-3天)
+
+| 任务 | ACT+UniVTAC Baseline | 双流目标 |
+|------|---------------------|---------|
+| insert_HDMI | 14% | **≥20%** |
+
+### 阶段2：困难任务验证 (5-7天)
+
+| 任务 | Baseline | 目标 | 期望提升 |
+|------|----------|------|----------|
+| put_bottle_in_shelf | 8% | ≥13% | +5% |
+| insert_HDMI | 14% | ≥20% | +6% |
+| lift_can | 29% | ≥35% | +6% |
+
+### 阶段3：全任务扩展 (1-2周)
+
+在UniVTAC全部8个任务上验证双流架构的泛化性能。
+
+### 阶段4：深度分析 (3-5天)
+
+- Fusion type消融实验
+- 模态权重可视化
+- 特征独立性分析
+- 接触阶段精度分析
+
+---
+
+## 🏗️ 架构设计
+
+### 信息流
+
+```
+视觉输入 → Vision Encoder → Vision Decoder → Vision Features ──┐
+                                                               ├→ Fusion Head → Final Actions
+触觉输入 → Tactile Encoder → Tactile Decoder → Tactile Features ┘
+```
+
+**关键特性**：
+- ✅ 完全独立的处理通路
+- ✅ 晚期融合保持模态特异性
+- ✅ 可学习的fusion权重
+- ✅ 端到端训练
+
+### 核心模块
+
+#### 1. DualStreamTransformer
+- 独立的vision/tactile encoder-decoder
+- 可选的跨流注意力（中间层）
+- 支持encoder/decoder参数共享
+
+#### 2. FusionActionHead
+4种融合策略：
+- **Concat**: 简单拼接+MLP
+- **Gated**: 自适应权重（推荐）
+- **Cross-Attention**: 模态间注意力
+- **MoE**: 混合专家路由
+
+#### 3. ContactAwareRouting (可选)
+根据接触状态动态调整模态权重。
+
+---
+
+## 📖 文档导航
+
+### 开始使用
+- **[启动清单](docs/LAUNCH_CHECKLIST.md)** - 从这里开始！
+- **[快速总览](docs/STATUS_SUMMARY.md)** - 一页纸状态
+
+### 实验规划
+- **[实验计划](docs/EXPERIMENT_PLAN.md)** - 完整4阶段计划
+- **[Baseline报告](docs/ACT_UNIVTAC_CHECKPOINT_REPORT.md)** - ACT+UniVTAC状态
+- **[准备报告](docs/EXPERIMENT_READY_REPORT.md)** - 检查清单
+
+### 架构设计
+- **[双流架构](docs/dual_stream_architecture.md)** - 设计理念和实现
+- **[架构批判](docs/architecture_critique.md)** - 原VTLA的6个设计缺陷
+
+---
+
+## 🔬 为什么需要双流架构？
+
+### 原始VTLA的问题
+
+```python
+# ❌ 早期融合破坏独立性
+fused_vision, fused_tactile = CrossModalFusion(vision, tactile)
+# fused_tactile已经包含视觉信息！
+
+tactile_refine_head(fused_tactile)  
+# 虚假的"纯触觉"分支
+```
+
+**结果**：
+- 触觉特征被视觉信息"污染"
+- 无法独立评估每个模态的贡献
+- 三阶段训练缺乏联合优化
+
+### 双流架构的解决方案
+
+```python
+# ✅ 保持独立直到最后
+vision_output = vision_encoder → vision_decoder
+tactile_output = tactile_encoder → tactile_decoder
+
+final_actions = fusion_head(vision_output, tactile_output)
+```
+
+**优势**：
+- ✅ 真正的模态独立性
+- ✅ 可解释的fusion权重
+- ✅ 端到端训练
+- ✅ 易于消融实验
+
+---
+
+## 📈 预期结果
+
+### 成功标准
+
+| 提升幅度 | 判断 | 后续行动 |
+|----------|------|----------|
+| >10%绝对提升 | 🎉 显著成功 | 发表论文 |
+| 5-10%绝对提升 | ✅ 成功 | 继续优化 |
+| 2-5%绝对提升 | ⚠️ 边际改进 | 分析原因 |
+| <2%绝对提升 | ❌ 无显著差异 | 重新设计 |
+
+### 假设验证
+
+1. **模态独立性**：vision和tactile特征低相关性（<0.5）
+2. **接触感知**：接触阶段触觉权重增加
+3. **训练效率**：端到端训练优于分阶段
+
+---
+
+## 💻 技术栈
+
+- **框架**: PyTorch 2.0+
+- **环境**: UniVTAC conda环境
+- **硬件**: NVIDIA L40S GPU
+- **评测**: IsaacSim (UniVTAC官方评测)
+
+---
+
+## 🤝 贡献
+
+本项目是研究原型，用于验证双流架构在接触丰富操作任务中的有效性。
+
+### 相关工作
+- **UniVTAC**: [GitHub](https://github.com/univtac/UniVTAC) | [论文](https://arxiv.org/abs/2602.10093)
+- **ACT**: Action Chunking with Transformers
+- **ViTAL**: Vision-Tactile Agent Learning (UniVTAC变体)
+
+---
+
+## 📄 许可
+
+本项目用于学术研究。
+
+---
+
+## 📞 联系
+
+详细文档请参考 `docs/` 目录。
+
+---
+
+**准备好了吗？开始实验！** 🚀
 
 ```bash
-scripts/training/continue_official_tasks.sh \
-  runs/stage2/official_<timestamp>_<git>_gpu123
+# 从这里开始
+cat docs/LAUNCH_CHECKLIST.md
 ```
-
-任务在物理 GPU 1/2/3 上做任务级并行；每次运行独立保存完整命令、配置、数据指纹、训练指标、曝光量和 checkpoint。参数依据、逐任务样本核算以及与论文实现的差异见 [UniVTAC 论文对齐训练协议](docs/UNIVTAC_PAPER_ALIGNED_TRAINING.md)。
-
-### 既有通用训练入口
-
-推荐的三卡 Stage 2 训练：
-
-```bash
-scripts/training/start_training_multigpu.sh stage2 3 1,2,3
-```
-
-单卡启动和状态检查：
-
-```bash
-scripts/training/start_training.sh stage2 1
-scripts/training/check_training.sh
-```
-
-启动器会自动创建 `runs/<stage>/<timestamp>_<git>_gpu<ids>/`，保存：
-
-- `config.json`：完整参数、命令、Git 状态、GPU/CUDA/PyTorch 信息、数据切分和归一化统计；
-- `launch_command.sh`：可复查的原始启动命令；
-- `train.log` 与 `metrics.jsonl`：完整日志和逐 epoch 指标；
-- `checkpoints/`：模型、优化器、调度器、数据统计和嵌入式运行配置；
-- `exit_code`：后台任务最终退出码。
-
-本机 NCCL 2.21.5 的 GPU P2P collective 会挂起，因此多卡启动器默认记录并设置 `NCCL_P2P_DISABLE=1`。
-
-更多参数和故障排查见 [训练指南](docs/TRAINING_GUIDE.md)。
-
-## 评测
-
-### 留出集离线评测
-
-```bash
-CUDA_VISIBLE_DEVICES=3 /home/rmc/miniconda/envs/UniVTAC/bin/python \
-  -m scripts.evaluation.eval_vtla_offline \
-  --checkpoint runs/stage2/20260809_155942_1073ae9_gpu123/checkpoints/stage2_epoch_130.ckpt \
-  --dataset-dir /home/rmc/workspace/UniVTAC/data/official/grasp_classify/clean \
-  --split validation \
-  --output runs/stage2/20260809_155942_1073ae9_gpu123/eval/offline_validation_epoch130.json
-```
-
-`--split validation` 会严格复用 checkpoint 中记录的验证 episode 清单，避免把训练轨迹混入模型选择。
-
-### UniVTAC 闭环评测
-
-首次启动 Isaac Sim 前，用户需要亲自阅读并接受 NVIDIA Omniverse EULA：
-
-```bash
-/home/rmc/miniconda/envs/UniVTAC/bin/python -c "import isaacsim"
-```
-
-随后执行：
-
-```bash
-/home/rmc/miniconda/envs/UniVTAC/bin/python \
-  -m scripts.evaluation.run_univtac_eval \
-  --run-dir runs/stage2/20260809_155942_1073ae9_gpu123 \
-  --deploy-config univtac_adapter/deploy_official8d_epoch130.yml \
-  --gpu 3 --total-num 100
-```
-
-合并分片结果：
-
-```bash
-/home/rmc/miniconda/envs/UniVTAC/bin/python \
-  -m scripts.evaluation.summarize_univtac_eval \
-  --result-root /home/rmc/workspace/UniVTAC/eval_result/VTLA/grasp_classify/deploy_official8d_epoch130 \
-  --start-seed 1000000 --end-seed 1000099 \
-  --output runs/stage2/20260809_155942_1073ae9_gpu123/eval/univtac/aggregate_result.json
-```
-
-评测请求、deploy/task 配置副本、stdout、退出码和结构化结果都会归档到对应 run；UniVTAC 原始场景数据、metadata 和视频保留在其 `eval_result/` 目录。
-
-## 测试与诊断
-
-```bash
-/home/rmc/miniconda/envs/UniVTAC/bin/python -m pytest -q
-```
-
-三卡 NCCL 健康检查：
-
-```bash
-CUDA_VISIBLE_DEVICES=1,2,3 NCCL_P2P_DISABLE=1 \
-  /home/rmc/miniconda/envs/UniVTAC/bin/python -m torch.distributed.run \
-  --standalone --nproc_per_node=3 -m scripts.diagnostics.nccl_smoke
-```
-
-## 关键设计限制
-
-- 尚无语言输入、tokenizer 或语言编码器；
-- 动作为“下一时刻 joint position”代理，而非机器人控制器真实 commanded action；
-- Stage 3 缺少可信的 contact 标签，无法直接监督接触检测；
-- 当前结果只覆盖 `grasp_classify`，不能外推为 UniVTAC 多任务能力。
-
-详细设计与问题清单见 [架构设计](docs/architecture_design.md)、[训练策略](docs/training_strategy.md) 和 [代码审查](docs/CODE_REVIEW.md)。

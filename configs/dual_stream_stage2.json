@@ -1,0 +1,102 @@
+{
+  "_comment": "Dual-Stream VTLA Stage 2 Training Configuration",
+  "_description": "保持视觉和触觉独立性的双流架构配置",
+
+  "model_type": "dual_stream",
+
+  "state_dim": 14,
+  "chunk_size": 10,
+  "camera_names": ["cam_high", "cam_left"],
+  "tactile_names": ["tac_left", "tac_right"],
+
+  "hidden_dim": 512,
+  "nheads": 8,
+  "dim_feedforward": 2048,
+  "dropout": 0.1,
+
+  "enc_layers": 4,
+  "dec_layers": 6,
+  "pre_norm": false,
+
+  "tactile_backbone": "resnet34",
+  "tactile_latent_dim": 512,
+  "pretrained_backbones": true,
+
+  "_dual_stream_config": "===== 双流架构特定配置 =====",
+
+  "shared_encoder": true,
+  "_shared_encoder_comment": "是否共享encoder参数（节省参数量，推荐true）",
+
+  "shared_decoder": false,
+  "_shared_decoder_comment": "是否共享decoder参数（通常false以保持独立性）",
+
+  "enable_cross_stream": false,
+  "_enable_cross_stream_comment": "是否启用跨流交互（可选，默认false）",
+
+  "cross_stream_layers": [],
+  "_cross_stream_layers_comment": "启用跨流交互的decoder层索引，例如 [3, 5]",
+
+  "fusion_type": "gated",
+  "_fusion_type_comment": "融合类型: concat|gated|cross_attn|moe",
+  "_fusion_type_options": {
+    "concat": "简单拼接，参数量最少，速度最快",
+    "gated": "自适应门控，推荐使用",
+    "cross_attn": "交叉注意力，效果可能更好但参数量大",
+    "moe": "混合专家，最灵活但最复杂"
+  },
+
+  "use_contact_routing": false,
+  "_use_contact_routing_comment": "是否使用接触感知路由（实验性功能）",
+
+  "use_cvae": true,
+  "_use_cvae_comment": "是否使用CVAE编码器（用于行为多样性）",
+
+  "latent_dim": 32,
+  "_latent_dim_comment": "CVAE潜在空间维度",
+
+  "_loss_weights": "===== 损失权重 =====",
+
+  "kl_weight": 10.0,
+  "pad_weight": 1.0,
+  "l1_reduction": "valid_mean",
+
+  "aux_vision_weight": 0.0,
+  "_aux_vision_weight_comment": "辅助损失：单独监督视觉流（可选，0表示不使用）",
+
+  "aux_tactile_weight": 0.0,
+  "_aux_tactile_weight_comment": "辅助损失：单独监督触觉流（可选，0表示不使用）",
+
+  "_training_config": "===== 训练配置 =====",
+
+  "lr": 1e-4,
+  "lr_backbone": 1e-5,
+  "batch_size": 8,
+  "num_epochs": 2000,
+  "seed": 42,
+
+  "backbone": "resnet18",
+  "position_embedding": "sine",
+  "masks": false,
+  "dilation": false,
+
+  "_dataset_config": "===== 数据集配置 =====",
+
+  "dataset_dir": "/home/rmc/workspace/UniVTAC/data/official/grasp_classify/clean",
+  "train_ratio": 0.9,
+  "stratify_by_class": true,
+
+  "_notes": [
+    "与原始VTLA的主要区别：",
+    "1. 不使用CrossModalFusion，保持模态独立到decoder输出",
+    "2. 使用DualStreamTransformer替代单一Transformer",
+    "3. 使用FusionActionHead替代DualPathActionHead",
+    "4. 推荐端到端训练，无需分阶段",
+    "",
+    "推荐的实验顺序：",
+    "1. 基础配置：shared_encoder=true, fusion_type=gated",
+    "2. 如果效果不够好，尝试：shared_encoder=false",
+    "3. 如果仍不够好，尝试：enable_cross_stream=true, cross_stream_layers=[3,5]",
+    "4. 尝试不同融合类型：cross_attn 或 moe",
+    "5. 可选：添加辅助损失 aux_vision_weight=0.3, aux_tactile_weight=0.3"
+  ]
+}
