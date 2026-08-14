@@ -1,20 +1,42 @@
-"""
-VTLA (Vision-Tactile-Language-Action) Model Package
-"""
+"""VTLA model package organized by model family."""
 
-from .tactile_encoder import TactileEncoder, TactileEncoderWithRefine
-from .cross_modal_fusion import CrossModalFusion, BiDirectionalCrossAttention
-from .vtla_policy import VTLAPolicy, VTLAModel
-from .action_heads import MainActionHead, TactileRefineHead, ContactDetector
+from .dual_stream import (
+    ContactAwareRouting,
+    DualStreamTransformer,
+    DualStreamVTLAModel,
+    DualStreamVTLAPolicy,
+    FusionActionHead,
+    build_dual_stream_vtla_model,
+)
+from .shared import TactileEncoder, TactileEncoderWithRefine
+from .vtla import (
+    BiDirectionalCrossAttention,
+    ContactDetector,
+    CrossModalFusion,
+    DualPathActionHead,
+    MainActionHead,
+    TactileRefineHead,
+    VTLAModel,
+    VTLAPolicy,
+    build_vtla_model,
+)
 
 __all__ = [
-    'TactileEncoder',
-    'TactileEncoderWithRefine',
-    'CrossModalFusion',
-    'BiDirectionalCrossAttention',
-    'VTLAPolicy',
-    'VTLAModel',
-    'MainActionHead',
-    'TactileRefineHead',
-    'ContactDetector',
+    "BiDirectionalCrossAttention",
+    "ContactAwareRouting",
+    "ContactDetector",
+    "CrossModalFusion",
+    "DualPathActionHead",
+    "DualStreamTransformer",
+    "DualStreamVTLAModel",
+    "DualStreamVTLAPolicy",
+    "FusionActionHead",
+    "MainActionHead",
+    "TactileEncoder",
+    "TactileEncoderWithRefine",
+    "TactileRefineHead",
+    "VTLAModel",
+    "VTLAPolicy",
+    "build_dual_stream_vtla_model",
+    "build_vtla_model",
 ]

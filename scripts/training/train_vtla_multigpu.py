@@ -17,8 +17,8 @@ import socket
 from datetime import timedelta
 from collections import defaultdict
 
-from models.tactile_encoder import TactileEncoderWithRefine
-from models.vtla_policy import VTLAPolicy
+from models.shared import TactileEncoderWithRefine
+from models.vtla import VTLAPolicy
 from dataloader import (
     TactilePretrainDataset,
     VTLADataset,

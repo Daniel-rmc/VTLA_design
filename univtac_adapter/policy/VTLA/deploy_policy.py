@@ -84,7 +84,7 @@ class Policy(BasePolicy):
         if project_str not in sys.path:
             sys.path.insert(0, project_str)
 
-        from models.vtla_policy import VTLAPolicy
+        from models.vtla import VTLAPolicy
 
         requested_device = args.get("device", "cuda:0" if torch.cuda.is_available() else "cpu")
         self.device = torch.device(requested_device)

@@ -13,7 +13,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from dataloader import VTLADataset, discover_episode_files
-from models.vtla_policy import VTLAPolicy
+from models.vtla import VTLAPolicy
 
 
 def parse_args():

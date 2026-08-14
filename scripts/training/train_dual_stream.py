@@ -26,7 +26,7 @@ except ImportError:
 # 添加项目根目录到path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from models.dual_stream_vtla_policy import DualStreamVTLAPolicy, build_dual_stream_vtla_model
+from models.dual_stream import DualStreamVTLAPolicy, build_dual_stream_vtla_model
 from dataloader import create_dataloader
 from training_utils import (
     append_epoch_metrics,

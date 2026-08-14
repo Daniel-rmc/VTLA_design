@@ -14,8 +14,8 @@ from dataloader import (
     split_episode_files,
     split_episode_files_univtac,
 )
-from models.action_heads import DualPathActionHead
-from models.vtla_policy import get_2d_sinusoid_encoding
+from models.vtla.action_heads import DualPathActionHead
+from models.vtla import get_2d_sinusoid_encoding
 from scripts.evaluation.eval_vtla_offline import select_episode_files
 
 

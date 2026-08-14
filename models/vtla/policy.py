@@ -9,13 +9,13 @@ import sys
 from pathlib import Path
 
 # 导入自定义模块
-from .tactile_encoder import TactileEncoder
+from ..shared import TactileEncoder
 from .cross_modal_fusion import BiDirectionalCrossAttention
 from .action_heads import DualPathActionHead
 
 # 添加同一 workspace 下的 UniVTAC 路径。环境变量仍可覆盖模块搜索，
 # 但独立评测脚本不应依赖训练启动器注入 PYTHONPATH。
-univtac_base = Path(__file__).resolve().parents[2] / 'UniVTAC'
+univtac_base = Path(__file__).resolve().parents[3] / 'UniVTAC'
 if univtac_base.is_dir():
     # Keep the local VTLA ``models`` package ahead of UniVTAC.  Prepending
     # UniVTAC's DETR directory makes multiprocessing workers resolve

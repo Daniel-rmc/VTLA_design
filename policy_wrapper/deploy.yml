@@ -1,0 +1,7 @@
+# Dual-Stream VTLA Deploy Configuration
+policy_name: DualStream
+seed: 0
+ckpt_setting: 50  # number of demos
+instruction_type: seen
+instuction_file: null
+train_config: null  # Will be set by environment variable

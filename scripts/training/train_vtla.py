@@ -15,8 +15,8 @@ from tqdm import tqdm
 import pickle
 from collections import defaultdict
 
-from models.tactile_encoder import TactileEncoderWithRefine
-from models.vtla_policy import VTLAPolicy
+from models.shared import TactileEncoderWithRefine
+from models.vtla import VTLAPolicy
 from training_utils import append_epoch_metrics, build_run_config, write_run_config
 
 

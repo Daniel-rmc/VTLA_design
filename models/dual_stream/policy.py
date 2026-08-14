@@ -9,12 +9,12 @@ import sys
 from pathlib import Path
 
 # 导入自定义模块
-from .tactile_encoder import TactileEncoder
-from .dual_stream_transformer import DualStreamTransformer
+from ..shared import TactileEncoder
+from .transformer import DualStreamTransformer
 from .fusion_action_head import FusionActionHead, ContactAwareRouting
 
 # 添加UniVTAC路径
-univtac_base = Path(__file__).resolve().parents[2] / 'UniVTAC'
+univtac_base = Path(__file__).resolve().parents[3] / 'UniVTAC'
 if univtac_base.is_dir():
     univtac_path = str(univtac_base)
     if univtac_path not in sys.path:

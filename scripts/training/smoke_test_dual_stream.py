@@ -10,7 +10,7 @@ from pathlib import Path
 # 添加项目根目录到path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from models.dual_stream_vtla_policy import DualStreamVTLAPolicy, build_dual_stream_vtla_model
+from models.dual_stream import DualStreamVTLAPolicy, build_dual_stream_vtla_model
 
 
 def test_model_creation():
@@ -137,7 +137,7 @@ def test_training_pass(model):
         aux_vision_weight = 0.0
         aux_tactile_weight = 0.0
 
-    from models.dual_stream_vtla_policy import DualStreamVTLAPolicy
+    from models.dual_stream import DualStreamVTLAPolicy
 
     # 临时包装
     policy = type('Policy', (), {'model': model, 'kl_weight': 10.0, 'pad_weight': 1.0,

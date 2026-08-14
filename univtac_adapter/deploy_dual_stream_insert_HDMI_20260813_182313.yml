@@ -1,0 +1,16 @@
+# Dual-Stream VTLA checkpoint evaluated through UniVTAC's original insert_HDMI/demo setting.
+policy_name: DualStream
+seed: 0
+instruction_type: seen
+instuction_file: null
+
+project_dir: /home/rmc/workspace/VTLA_design
+checkpoint: /home/rmc/workspace/VTLA_design/runs/dual_stream/dual_stream_insert_HDMI_20260813_182313_6dc81ea/checkpoints/dual_stream_best.ckpt
+device: cuda:0
+
+# Match the UniVTAC deployment behavior: re-plan at every simulator observation
+# and execute the first action from the predicted chunk with bounded normalized outputs.
+temporal_agg: true
+action_step: 0
+normalized_action_clip: 5.0
+use_deterministic_latent: true
