@@ -15,6 +15,7 @@ venv/
 # Training artifacts
 logs/
 checkpoints/
+docs/
 outputs/
 runs/
 wandb/
