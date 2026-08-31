@@ -1,0 +1,24 @@
+{
+  "image": "vtla-train:lerobot-0.6.1",
+  "image_id": "sha256:ea3dea88978da70878d8ad256a722f37d04295afa67b9546d899250f943f474d",
+  "image_size_bytes": 8998314673,
+  "built_at": "2026-08-27T17:04:15.33684448+08:00",
+  "lerobot_version": "0.6.1",
+  "lerobot_commit": "7e241bd630a3719a56157a497ce5d08f244784f1",
+  "python": "3.12",
+  "torch": "2.11.0+cu128",
+  "torchvision": "0.26.0+cu128",
+  "draccus": "0.11.6",
+  "cuda_base": "nvidia/cuda:12.8.1-base-ubuntu24.04@sha256:133c78a0575303be34164d0b90137a042172bdf60696af01a3c424ab402d86e2",
+  "uv_image": "ghcr.io/astral-sh/uv:0.8.13@sha256:4de5495181a281bc744845b9579acf7b221d6791f99bcc211b9ec13f417c2853",
+  "sha256": {
+    "docker/Dockerfile.train": "9b46dd2272446b566d31a8c2ff1eb33da9ac1c4aeddd73317e88a2ab51593e2b",
+    "docker/patches/lerobot-0.6.1-eval-workers.patch": "34a8e3346a0ac3f9c6efc8d8be2a7e5a1a662db7897b9c218821aaaf94e5aaea",
+    "third_party/lerobot/uv.lock": "fcca9a7a87244fdfe82ae2760e49f6254267b5016d8564e4b24596a166250c6f",
+    "pyproject.toml": "12a528985dab659d1305f0d5fd97e006ce9b7179d9b1d683ac5119a8bf9aab66"
+  },
+  "stable_nccl_defaults": {
+    "NCCL_CUMEM_ENABLE": "0",
+    "NCCL_P2P_DISABLE": "1"
+  }
+}

@@ -1,0 +1,35 @@
+name: vtla
+
+services:
+  train:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.train
+      args:
+        LOCAL_UID: ${LOCAL_UID:-1000}
+        LOCAL_GID: ${LOCAL_GID:-1000}
+    image: vtla-train:lerobot-0.6.1
+    init: true
+    stdin_open: true
+    tty: true
+    shm_size: 120g
+    gpus: all
+    restart: unless-stopped
+    command: ["sleep", "infinity"]
+    working_dir: /workspace/VTLA_design
+    volumes:
+      - ${WORKSPACE_ROOT:-/home/rmc/workspace}:/workspace
+      - ${VTLA_DATASETS_ROOT:-/home/rmc/workspace/datasets}:/workspace/datasets
+      - vtla-cache:/home/vtla/.cache
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      HF_HOME: /home/vtla/.cache/huggingface
+      HF_LEROBOT_HOME: /home/vtla/.cache/huggingface/lerobot
+      TORCH_HOME: /home/vtla/.cache/torch
+      TRITON_CACHE_DIR: /home/vtla/.cache/triton
+      NCCL_CUMEM_ENABLE: ${NCCL_CUMEM_ENABLE:-0}
+      NCCL_P2P_DISABLE: ${NCCL_P2P_DISABLE:-1}
+
+volumes:
+  vtla-cache:

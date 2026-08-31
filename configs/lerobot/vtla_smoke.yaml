@@ -1,0 +1,40 @@
+dataset:
+  repo_id: local/manipulationnet_peg_in_hole_15holes
+  root: /workspace/datasets/manipulationNet/peg_in_hole/15holes_v3
+  video_backend: pyav
+  return_uint8: true
+  use_imagenet_stats: true
+  eval_split: 0.0
+policy:
+  type: vtla
+  device: cuda
+  dtype: float32
+  use_amp: false
+  push_to_hub: false
+  chunk_size: 4
+  n_action_steps: 4
+  image_size: [64, 64]
+  vision_backbone_weights: null
+  tactile_backbone_weights: null
+  dim_model: 64
+  n_heads: 4
+  dim_feedforward: 128
+  n_encoder_layers: 1
+  n_decoder_layers: 1
+  cross_attention_layers: 1
+  n_vae_encoder_layers: 1
+  temporal_ensemble_coeff: null
+job_name: vtla_smoke
+seed: 0
+batch_size: 1
+num_workers: 0
+eval_num_workers: 0
+persistent_workers: false
+steps: 1
+log_freq: 1
+eval_steps: 0
+env_eval_freq: 0
+save_checkpoint: true
+save_freq: 1
+wandb:
+  enable: false

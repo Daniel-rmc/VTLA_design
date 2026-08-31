@@ -1,0 +1,89 @@
+# syntax=docker/dockerfile:1.7
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.8.13@sha256:4de5495181a281bc744845b9579acf7b221d6791f99bcc211b9ec13f417c2853
+ARG CUDA_BASE_IMAGE=nvidia/cuda:12.8.1-base-ubuntu24.04@sha256:133c78a0575303be34164d0b90137a042172bdf60696af01a3c424ab402d86e2
+FROM ${UV_IMAGE} AS uv
+
+FROM ${CUDA_BASE_IMAGE}
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG LOCAL_UID=1000
+ARG LOCAL_GID=1000
+ARG LEROBOT_VERSION=0.6.1
+ARG LEROBOT_COMMIT=7e241bd630a3719a56157a497ce5d08f244784f1
+
+LABEL org.opencontainers.image.title="VTLA LeRobot training environment" \
+      org.opencontainers.image.description="Reproducible GPU environment for the VTLA LeRobot policy" \
+      org.opencontainers.image.version="0.1.0" \
+      io.lerobot.version="${LEROBOT_VERSION}" \
+      io.lerobot.commit="${LEROBOT_COMMIT}"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_LINK_MODE=copy \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    HF_HOME=/home/vtla/.cache/huggingface \
+    HF_LEROBOT_HOME=/home/vtla/.cache/huggingface/lerobot \
+    TORCH_HOME=/home/vtla/.cache/torch \
+    TRITON_CACHE_DIR=/home/vtla/.cache/triton \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TOKENIZERS_PARALLELISM=false
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        ffmpeg \
+        git \
+        git-lfs \
+        libegl1 \
+        libgl1 \
+        libglib2.0-0 \
+        python3 \
+        python3-dev \
+        python3-venv \
+        tmux \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=uv /uv /uvx /usr/local/bin/
+
+RUN groupadd --gid "${LOCAL_GID}" vtla \
+    && useradd --uid "${LOCAL_UID}" --gid "${LOCAL_GID}" --create-home --shell /bin/bash vtla \
+    && mkdir -p /opt/lerobot /opt/venv /opt/vtla /workspace /home/vtla/.cache/torch /home/vtla/.cache/triton \
+    && chown -R vtla:vtla /opt/lerobot /opt/venv /opt/vtla /workspace /home/vtla
+
+COPY --chown=vtla:vtla third_party/lerobot/ /opt/lerobot/
+
+USER vtla
+WORKDIR /opt/lerobot
+
+# The lockfile belongs to the pinned LeRobot submodule and fixes all Python
+# dependencies, including the CUDA 12.8 PyTorch wheels.
+RUN uv sync --locked --extra training --no-dev --no-cache
+
+# Keep the pinned third-party checkout pristine while carrying a narrowly
+# scoped, reviewable LeRobot 0.6.1 compatibility patch in the image. Separate
+# eval workers prevent infrequent held-out evaluation from duplicating the
+# persistent training worker pool and exhausting host RAM.
+COPY --chown=vtla:vtla docker/patches/lerobot-0.6.1-eval-workers.patch /tmp/lerobot-eval-workers.patch
+RUN git apply --check /tmp/lerobot-eval-workers.patch \
+    && git apply /tmp/lerobot-eval-workers.patch \
+    && rm /tmp/lerobot-eval-workers.patch
+
+COPY --chown=vtla:vtla pyproject.toml README.md /opt/vtla/
+COPY --chown=vtla:vtla src/ /opt/vtla/src/
+RUN uv pip install --no-deps /opt/vtla \
+    && python -c "import importlib.metadata as m; assert m.version('lerobot') == '${LEROBOT_VERSION}'; assert m.version('lerobot_policy_vtla') == '0.1.0'"
+
+WORKDIR /workspace/VTLA_design
+
+# The current L40S host hangs in NCCL's P2P/CUDA-memory transport from Docker.
+# Shared-memory transport is slower but has been verified with a multi-rank
+# all-reduce and is the stable default. Users can override either variable.
+ENV NCCL_CUMEM_ENABLE=0 \
+    NCCL_P2P_DISABLE=1
+
+CMD ["bash"]

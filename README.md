@@ -1,10 +1,44 @@
 # VTLA Design
 
-面向 UniVTAC 接触操作任务的视觉—触觉动作策略研究仓库。项目包含模型实现、三阶段训练、官方数据校验、离线验证、UniVTAC 闭环评测和完整的实验归档工具。
+面向接触操作任务的视觉—触觉动作策略仓库。当前推荐主线是作为独立插件接入固定版本的 Hugging Face LeRobot，用 LeRobot v3 真机数据完成训练、checkpoint 保存和推理；原有 UniVTAC/HDF5 实验链路保留在仓库中作为历史基线。
 
-> 当前实现尚未接入语言编码器，因此严格来说是 Vision-Tactile-Action（VTA）策略。官方 HDF5 没有独立的 commanded-action 字段，训练按 ACT 数据约定使用下一时刻关节位置作为动作代理。
+> 当前实现尚未接入语言编码器，因此严格来说是 Vision-Tactile-Action（VTA）策略。推荐主线的 manipulationNet v3 数据使用 metadata 定义的 16D 双臂末端位姿/夹爪 action；历史 UniVTAC HDF5 没有独立的 commanded-action 字段，旧链路才按 ACT 数据约定使用下一时刻关节位置作为动作代理。
 
-## 当前基线
+## 推荐主线：LeRobot v3 + manipulationNet
+
+当前已验证的组合：
+
+- LeRobot `v0.6.1`，submodule commit `7e241bd630a3719a56157a497ce5d08f244784f1`；
+- 专用镜像 `vtla-train:lerobot-0.6.1`，Python 3.12、PyTorch 2.11.0+cu128；
+- 数据集 `/home/rmc/workspace/datasets/manipulationNet/peg_in_hole/15holes_v3`；
+- 1,508 episodes、196,667 frames、15 tasks、10 Hz；
+- 28D state、16D action、3 路视觉相机、4 路触觉相机；
+- 单卡完整模型和双卡 DDP 训练、checkpoint 保存、严格回载和真实样本推理均已通过；
+- 首轮双卡 30K 正式训练已完成，最终 checkpoint 位于 `outputs/train/2026-08-27_vtla_manipulationnet_30k_gpu03_v2/checkpoints/030000`。
+
+首次使用：
+
+```bash
+cd /home/rmc/workspace/VTLA_design
+git submodule update --init --recursive
+./docker/build_train_image.sh
+./docker/run_train_container.sh
+docker exec -it vtla_train bash
+```
+
+进入容器后先做环境和数据校验，再启动训练：
+
+```bash
+python docker/verify_environment.py
+python scripts/data/validate_manipulationnet.py \
+  --source-root /workspace/datasets/manipulationNet/peg_in_hole/15holes_v3 \
+  --decode-samples 3 --quiet
+VTLA_GPUS=0,3 ./scripts/training/start_lerobot_vtla_tmux.sh
+```
+
+容器固定可见全部 GPU、内置 tmux、使用 120G SHM，并以 `unless-stopped` 策略常驻；具体训练卡必须通过 `VTLA_GPUS` 显式选择。正式配置是每 GPU batch 32、8 workers、30,000 steps，每 5,000 steps 保存；LR 在前 1,000 steps warmup，保持到 27,000，然后 cosine decay 到 `1e-6`。W&B 默认使用在线项目 `vtla-manipulationnet-30k`，API key 从 Git 忽略的 `.secrets/wandb.env` 读取。配置位于 [configs/lerobot/vtla_manipulationnet.yaml](configs/lerobot/vtla_manipulationnet.yaml)，完整的数据重建、tmux/W&B、多卡训练、恢复训练和 checkpoint 推理命令见 [LeRobot 训练与容器指南](docs/LEROBOT_TRAINING.md)。
+
+## 历史 UniVTAC 基线
 
 - 数据：ModelScope `byml2024/UniVTAC` 的完整 `grasp_classify/clean` 子集，共 100 条轨迹、5,265 个时序样本。
 - 控制接口：原始 9D 关节观测取列 `0..7`，模型与 UniVTAC 控制端统一为 8D（7 个机械臂关节 + 1 个夹爪命令）。
@@ -20,6 +54,11 @@
 ```text
 VTLA_design/
 ├── README.md                  # 项目总览和常用命令
+├── pyproject.toml             # lerobot_policy_vtla 外部插件包
+├── third_party/lerobot/       # 固定为 v0.6.1 的 Git submodule
+├── src/lerobot_policy_vtla/   # LeRobot policy/config/processor 与模型主体
+├── configs/lerobot/           # 正式训练和 smoke 配置
+├── docker/                    # 固定版本训练镜像与环境/DDP 健康检查
 ├── dataloader.py              # HDF5 数据发现、切分、归一化和样本构造
 ├── training_utils.py          # 配置、Git/GPU 元数据和指标记录
 ├── models/                    # 模型主体、编码器、融合层和动作头
@@ -38,7 +77,7 @@ VTLA_design/
 
 脚本和文档的详细索引分别见 [scripts/README.md](scripts/README.md) 与 [docs/README.md](docs/README.md)。
 
-## 环境约定
+## 历史 UniVTAC 环境约定
 
 当前验证环境：
 

@@ -4,11 +4,13 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
 
 # Local environments and editor state
 .venv/
 venv/
 .env
+.secrets/
 .idea/
 .vscode/
 

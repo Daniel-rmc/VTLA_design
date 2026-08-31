@@ -1,0 +1,46 @@
+diff --git a/src/lerobot/configs/train.py b/src/lerobot/configs/train.py
+index c6dc020..bf8bcc4 100644
+--- a/src/lerobot/configs/train.py
++++ b/src/lerobot/configs/train.py
+@@ -99,6 +99,9 @@ class TrainPipelineConfig(HubMixin):
+     cudnn_deterministic: bool = False
+     # Number of workers for the dataloader.
+     num_workers: int = 4
++    # Held-out evaluation is infrequent and should not duplicate a large pool of
++    # persistent training workers. Zero evaluates in the training rank process.
++    eval_num_workers: int = 0
+     batch_size: int = 8
+     prefetch_factor: int = 4
+     persistent_workers: bool = True
+diff --git a/src/lerobot/scripts/lerobot_train.py b/src/lerobot/scripts/lerobot_train.py
+index 10ca393..892703f 100644
+--- a/src/lerobot/scripts/lerobot_train.py
++++ b/src/lerobot/scripts/lerobot_train.py
+@@ -92,9 +92,10 @@ def _make_eval_envs(cfg: TrainPipelineConfig) -> Iterator[dict[str, dict[int, An
+         close_envs(envs)
+ 
+ 
+-def _dataloader_worker_kwargs(cfg: TrainPipelineConfig) -> dict[str, Any]:
++def _dataloader_worker_kwargs(cfg: TrainPipelineConfig, num_workers: int | None = None) -> dict[str, Any]:
+     """Return worker-only DataLoader options, disabling them for single-process loading."""
+-    workers_enabled = cfg.num_workers > 0
++    resolved_num_workers = cfg.num_workers if num_workers is None else num_workers
++    workers_enabled = resolved_num_workers > 0
+     return {
+         "prefetch_factor": cfg.prefetch_factor if workers_enabled else None,
+         "persistent_workers": cfg.persistent_workers and workers_enabled,
+@@ -529,11 +530,11 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
+         eval_dataloader = torch.utils.data.DataLoader(
+             eval_ds,
+             batch_size=cfg.batch_size,
+             shuffle=False,
+-            num_workers=cfg.num_workers,
++            num_workers=cfg.eval_num_workers,
+             pin_memory=device.type == "cuda",
+             drop_last=False,
+             collate_fn=eval_collate_fn,
+-            **_dataloader_worker_kwargs(cfg),
++            **_dataloader_worker_kwargs(cfg, num_workers=cfg.eval_num_workers),
+         )
+ 
+     # Prepare everything with accelerator

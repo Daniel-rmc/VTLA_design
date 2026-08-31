@@ -1,0 +1,17 @@
+.git
+third_party/lerobot/.git
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.venv
+logs
+runs
+outputs
+checkpoints
+wandb
+.secrets
+univtac_adapter
+data_manifests
+docs
+tests

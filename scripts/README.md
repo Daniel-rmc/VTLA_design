@@ -1,5 +1,16 @@
 # Scripts
 
+## LeRobot 推荐入口
+
+- `data/aggregate_manipulationnet.py`：将 15 个本地 LeRobot v3 子数据集合并为一个多任务数据集；
+- `data/validate_manipulationnet.py`：校验元数据、parquet、视频引用、维度和真实视频解码；
+- `data/upload_to_modelscope.sh`：参数化上传一个或多个文件/目录到 ModelScope dataset/model 仓库，支持安全 token 输入与 dry-run；默认清除本机 HTTP(S)/ALL 代理并直连，只有显式传入 `--use-proxy` 才继承代理；
+- `training/train_lerobot_vtla.sh`：单卡或 Accelerate/DDP 正式训练入口；
+- `training/start_lerobot_vtla_tmux.sh`：在容器内创建可重连的 tmux 正式训练 session；
+- `training/validate_checkpoint.py`：严格回载 checkpoint 与处理器，并用真实数据样本推理。
+
+完整命令见 [LeRobot 训练与容器指南](../docs/LEROBOT_TRAINING.md)。以下内容为原有 UniVTAC/HDF5 工具。
+
 所有命令默认从项目根目录 `/home/rmc/workspace/VTLA_design` 执行。Python 入口统一使用模块方式（`python -m ...`），这样移动脚本后仍能稳定导入根目录的 `models`、`dataloader` 和 `training_utils`。
 
 ## training

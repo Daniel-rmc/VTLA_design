@@ -2,6 +2,8 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [LEROBOT_TRAINING.md](LEROBOT_TRAINING.md) | 推荐主线：LeRobot v3 数据、专用容器、单/多卡训练、恢复和 checkpoint 推理 |
+| [TACTILE_VLA_RESEARCH_PLAN.md](TACTILE_VLA_RESEARCH_PLAN.md) | 触觉因果价值、正确采集方式、模型接入与最小实验矩阵 |
 | [TRAINING_STATUS.md](TRAINING_STATUS.md) | 当前已完成训练、checkpoint 和 UniVTAC 结果 |
 | [TRAINING_GUIDE.md](TRAINING_GUIDE.md) | 训练启动、参数覆盖、监控、产物和故障排查 |
 | [UNIVTAC_PAPER_ALIGNED_TRAINING.md](UNIVTAC_PAPER_ALIGNED_TRAINING.md) | 原论文配置、50 条数据切分、曝光量核算和多任务正式训练协议 |
